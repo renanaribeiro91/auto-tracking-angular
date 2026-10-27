@@ -1,0 +1,20 @@
+# dependências e build
+node_modules/
+dist/
+release/
+coverage/
+
+# artefatos locais de ferramentas de IA/automação
+.claude/
+.claude-flow/
+.swarm/
+.omc/
+.cc-writes/
+agentdb.rvf
+agentdb.rvf.lock
+ruvector.db
+_bmad/
+_bmad-output/
+
+# sistema
+.DS_Store
