@@ -3,6 +3,9 @@ import { START_TAG, TemplateAnalysis } from './template-analysis.js';
 import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, isInputField } from './tagger.constants.js';
 import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { slug } from '../../domain/contract/slug.js';
+import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
+import { encodeTrackingToken, decodeTrackingToken } from '../../domain/contract/tracking-token.js';
+import type { TrackingElement } from '../../domain/contract/tracking-element.js';
 import type { NumericSelection } from './selection-provenance.js';
 import ts from 'typescript';
 
@@ -27,6 +30,8 @@ export interface TagEntry {
   readonly origem: string;
   readonly arquivo: string;
   readonly linha: number;
+  /** Referência do evento completo usada pelo HTML e runtime. */
+  readonly ref?: string;
 }
 
 export interface TagDiagnostic {
@@ -54,6 +59,7 @@ export interface TagContext {
   readonly attrQuote?: '"' | "'";
   /** linha do início do template no arquivo (template inline em .ts) */
   readonly lineOffset?: number;
+  readonly mode?: 'classic' | 'ref';
 }
 
 export interface TagResult {
@@ -202,30 +208,32 @@ export class TemplateTagger {
 
   /** Codifica os seletores de gesto reconhecidos no elemento host. */
   encodeOutputs(list: readonly { id: string; rotulo: string; output: string; trigger: OutputTrigger }[]): string {
-    return list.map((o) => `${o.id}|${o.trigger.event}|${o.trigger.selector}|${o.rotulo}|${o.output}`).join(';');
+    return list.map((item) => `${item.id}|${item.trigger.event}|${item.trigger.selector}|${item.rotulo}|${item.output}`).join(';');
+  }
+
+  private asOutputBindings(list: readonly { id: string; rotulo: string; output: string; trigger: OutputTrigger }[]): OutputBinding[] {
+    return list.map((item) => ({ id: item.id, event: item.trigger.event, selector: item.trigger.selector, label: item.rotulo, output: item.output }));
   }
 
   private decodeOutputIds(value: string | undefined): Map<string, string> {
-    // saída → id já atribuído, para manter ids estáveis entre execuções
+    // Migra v1/v2 preservando sempre o ID publicado do output.
     const map = new Map<string, string>();
-    for (const part of (value ?? '').split(';').filter(Boolean)) {
-      const [id, , , , output] = part.split('|');
-      if (id && output) map.set(output, id);
+    for (const binding of decodeOutputBindings(value)) {
+      if (binding.output) map.set(binding.output, binding.id);
     }
     return map;
   }
 
   tagTemplate(html: string, ctx: TagContext): TagResult {
-    const { funcionalidade, tela } = ctx;
     const masked = this.maskComments(html);
     const entries: TagEntry[] = [];
     const diagnostics: TagDiagnostic[] = [];
     const inserts: { at: number; text: string }[] = [];
     const removals: { at: number; length: number }[] = [];
+    const replacements: { at: number; length: number; text: string }[] = [];
     let screenPlaced = !ctx.isScreen;
     let skipScreenUntil = -1;
     const q = ctx.attrQuote ?? '"';
-    const prefix = this.idPrefix(funcionalidade, tela);
     const claimed = ctx.claimedIds ?? new Set<string>();
     // O conteúdo projetado é transferido para o ion-modal. O anchor permanece
     // naquele DOM e vincula o clique físico ao owner original, sem adivinhação.
@@ -233,15 +241,48 @@ export class TemplateTagger {
 
     for (const m of masked.matchAll(START_TAG)) {
       const tag = m[1]!.toLowerCase();
-      const attrs = this.analysis.parseAttrs(m[2] ?? '');
+      const originalAttrs = this.analysis.parseAttrs(m[2] ?? '');
+      const attrs = new Map(originalAttrs);
+      const priorRef = originalAttrs.get('data-at-ref');
+      const prior = ctx.mode === 'ref' && priorRef ? decodeTrackingToken(priorRef) : null;
+      if (priorRef && !prior) {
+        diagnostics.push({ code: 'TRACKING_REFERENCE_UNKNOWN', arquivo: ctx.relFile, linha: this.lineOf(html, m.index!), mensagem: `data-at-ref não é um token autocontido válido para o modo escolhido` });
+        continue;
+      }
+      // Reconstituir atributos semânticos apenas em memória; o HTML permanece compacto.
+      if (prior) {
+        attrs.set('data-at-owner', prior.owner);
+        attrs.set('data-at-funcionalidade', prior.funcionalidade);
+        attrs.set('data-at-tela', prior.tela);
+        if (prior.screenId) attrs.set('data-at-screen', prior.screenId);
+        if (prior.click) {
+          attrs.set('data-at-id', prior.click.id);
+          attrs.set('data-at-event', prior.click.event);
+          attrs.set('data-at-elemento', prior.click.elemento);
+          attrs.set('data-at-rotulo', prior.click.rotulo);
+          if (prior.click.opcaoPermitida) attrs.set('data-at-option-allowed', prior.click.opcaoPermitida);
+        }
+      }
+      // Em componentes compartilhados, atributos já instrumentados são o
+      // contrato de identidade existente: não o reescrever por inferências
+      // de layout. Para telas roteadas, o resolver usa o código da rota.
+      const hasTracking = attrs.has('data-at-id') || attrs.has('data-at-outputs')
+        || attrs.has('data-at-overlay-outputs') || attrs.has('data-at-output-ref') || attrs.has('data-at-overlay-ref') || !!prior;
+      const funcionalidade = !ctx.isScreen && hasTracking
+        ? attrs.get('data-at-funcionalidade') || ctx.funcionalidade : ctx.funcionalidade;
+      const tela = !ctx.isScreen && hasTracking
+        ? attrs.get('data-at-tela') || ctx.tela : ctx.tela;
+      const prefix = this.idPrefix(funcionalidade, tela);
       const insertAt = m.index! + 1 + m[1]!.length;
       const linha = this.lineOf(html, m.index!) + (ctx.lineOffset ?? 1) - 1;
       const tagEnd = m.index! + m[0].length;
       const desired = new Map<string, string>();
+      const entryStart = entries.length;
       /** atributos derivados por inteiro do código: sempre regravados quando divergem */
       const derived = new Set<string>();
       const portalAnchor = portalAnchors.get(m.index!);
       if (portalAnchor?.length) {
+        const bindings = this.asOutputBindings(portalAnchor);
         desired.set('data-at-overlay-outputs', this.encodeOutputs(portalAnchor));
         derived.add('data-at-overlay-outputs');
       }
@@ -290,9 +331,16 @@ export class TemplateTagger {
         desired.set('data-at-elemento', elemento);
         desired.set('data-at-rotulo', rotulo);
         if (selectionInput) {
-          desired.set('data-at-option', `{{${selectionInput.input}}}`);
+          if (ctx.mode !== 'ref') {
+            desired.set('data-at-option', `{{${selectionInput.input}}}`);
+            derived.add('data-at-option');
+          }
+          // O índice dinâmico deve estar observável no aria-label acessível:
+          // não inserir interpolações de tracking no HTML do consumidor.
+          if (ctx.mode === 'ref' && !attrs.has('[attr.aria-label]')) {
+            diagnostics.push({ code: 'OPTION_ACCESSIBLE_SOURCE_MISSING', arquivo: ctx.relFile, linha, mensagem: `ação ${handler} possui opção dinâmica mas não expõe [attr.aria-label] no elemento` });
+          }
           desired.set('data-at-option-allowed', selectionInput.allowed.join('|'));
-          derived.add('data-at-option');
           derived.add('data-at-option-allowed');
         }
         if (event !== 'click') {
@@ -304,7 +352,9 @@ export class TemplateTagger {
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
       if (trackable && this.isCustomElement(tag)) {
+        const previous = prior?.outputs;
         const known = this.decodeOutputIds(attrs.get('data-at-outputs'));
+        for (const binding of previous ?? []) if (binding.output) known.set(binding.output, binding.id);
         const outputs: { id: string; rotulo: string; output: string; trigger: OutputTrigger }[] = [];
         for (const [key, expr] of attrs) {
           const output = /^\(([\w.$]+)\)$/.exec(key)?.[1];
@@ -371,17 +421,55 @@ export class TemplateTagger {
         derived.add('data-at-funcionalidade');
         derived.add('data-at-tela');
       }
-      // obsoleto (sem prova atual) ou derivado divergente: o atributo sai e, se ainda desejado, é regravado
-      for (const k of attrs.keys()) {
+      if (ctx.mode === 'ref' && desired.size > 0) {
+        const bindings = decodeOutputBindings(desired.get('data-at-outputs'));
+        const overlay = decodeOutputBindings(desired.get('data-at-overlay-outputs'));
+        const screenId = desired.get('data-at-screen');
+        const clickId = desired.get('data-at-id');
+        const clickEvent = desired.get('data-at-event') ?? 'click';
+        const element: TrackingElement = {
+          owner: ctx.owner, funcionalidade, tela,
+          ...(screenId ? { screenId } : {}),
+          ...(clickId ? { click: { id: clickId, event: clickEvent,
+            elemento: attrs.get('data-at-elemento') ?? desired.get('data-at-elemento') ?? 'botao',
+            rotulo: attrs.get('data-at-rotulo') ?? desired.get('data-at-rotulo') ?? '',
+            ...(desired.get('data-at-option-allowed') ? { opcaoPermitida: desired.get('data-at-option-allowed')! } : {}),
+            ...(desired.get('data-at-option-allowed') && attrs.has('[attr.aria-label]') ? { opcaoFonte: 'aria-label-numero' as const } : {})
+          } } : {}),
+          ...(bindings.length ? { outputs: bindings } : {}),
+          ...(overlay.length ? { overlayOutputs: overlay } : {}),
+        };
+        const ref = encodeTrackingToken(element);
+        for (let index = entryStart; index < entries.length; index++) entries[index] = { ...entries[index]!, ref };
+        desired.clear();
+        desired.set('data-at-ref', ref);
+        derived.clear();
+        derived.add('data-at-ref');
+      }
+      // Substitui o output no mesmo lugar: a compactação não deve reordenar
+      // os outros atributos da tag nem produzir diffs sem significado.
+      const outputReplaced = new Set<string>();
+      for (const name of ['data-at-outputs', 'data-at-overlay-outputs', 'data-at-output-ref', 'data-at-overlay-ref', 'data-at-ref']) {
+        if (!originalAttrs.has(name) || !desired.has(name) || originalAttrs.get(name) === desired.get(name)) continue;
+        const oldAttribute = new RegExp(`(\\s+${name}\\s*=\\s*)(["'])([^"']*)\\2`).exec(m[0]);
+        if (!oldAttribute) continue;
+        const replacement = `${oldAttribute[1]}${oldAttribute[2]}${desired.get(name)}${oldAttribute[2]}`;
+        replacements.push({ at: m.index! + oldAttribute.index, length: oldAttribute[0].length, text: replacement });
+        outputReplaced.add(name);
+      }
+      // obsoleto (sem prova atual) ou derivado divergente: atributos restantes
+      // são reconciliados normalmente, preservando valores manuais.
+      for (const k of originalAttrs.keys()) {
+        if (outputReplaced.has(k)) continue;
         if (!k.startsWith('data-at-')) continue;
-        const stale = !desired.has(k) || (derived.has(k) && attrs.get(k) !== desired.get(k));
+        const stale = !desired.has(k) || (derived.has(k) && originalAttrs.get(k) !== desired.get(k));
         if (!stale) continue;
         const found = new RegExp(`\\s+${k}\\s*=\\s*(["'])[^"']*\\1`).exec(m[0]);
         if (found) removals.push({ at: m.index! + found.index, length: found[0].length });
       }
       if (desired.size === 0) continue;
       // valores existentes (inclusive ajustes manuais) são preservados; ausentes e derivados divergentes são gravados
-      const missing = [...desired].filter(([k, v]) => !attrs.has(k) || (derived.has(k) && attrs.get(k) !== v)).map(([k, v]) => `${k}=${q}${v}${q}`);
+      const missing = [...desired].filter(([k, v]) => !outputReplaced.has(k) && (!originalAttrs.has(k) || (derived.has(k) && originalAttrs.get(k) !== v))).map(([k, v]) => `${k}=${q}${v}${q}`);
       if (missing.length) inserts.push({ at: insertAt, text: ' ' + missing.join(' ') });
     }
 
@@ -389,7 +477,7 @@ export class TemplateTagger {
       diagnostics.push({ code: 'SCREEN_MARKER_NOT_PLACEABLE', arquivo: ctx.relFile, linha: ctx.lineOffset ?? 1, mensagem: 'componente roteado sem elemento renderizado fora de <ng-template>; screen_view sem marcador' });
     }
 
-    const edits = [...inserts.map((i) => ({ at: i.at, del: 0, text: i.text })), ...removals.map((r) => ({ at: r.at, del: r.length, text: '' }))]
+    const edits = [...replacements.map((r) => ({ at: r.at, del: r.length, text: r.text })), ...inserts.map((i) => ({ at: i.at, del: 0, text: i.text })), ...removals.map((r) => ({ at: r.at, del: r.length, text: '' }))]
       // do fim para o início; na mesma posição a remoção vem antes, senão apagaria o texto recém-inserido
       .sort((x, y) => y.at - x.at || y.del - x.del);
     let out = html;

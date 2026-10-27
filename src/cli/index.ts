@@ -150,14 +150,17 @@ class AutoTrackingCli {
     const completed: PlannedChange[] = [];
     try {
       for (const change of changes) {
-        if (fs.readFileSync(change.file, 'utf-8') !== change.before) {
+        if ((fs.existsSync(change.file) ? fs.readFileSync(change.file, 'utf-8') : '') !== change.before) {
           throw new Error(`arquivo alterado durante a execução: ${change.file}`);
         }
         this.atomicWrite(change.file, change.after);
         completed.push(change);
       }
     } catch (error) {
-      for (const change of completed.reverse()) this.atomicWrite(change.file, change.before);
+      for (const change of completed.reverse()) {
+        if (change.before === '') fs.rmSync(change.file, { force: true });
+        else this.atomicWrite(change.file, change.before);
+      }
       throw error;
     }
   }
@@ -310,6 +313,9 @@ class AutoTrackingCli {
   ): Promise<Report> {
     if (dryRun) return this.applyResult(root, paths, result, summary, status, [], true);
 
+    const invalidManifest = result.diagnostics.find((d) => d.code === 'TRACKING_REFERENCE_UNKNOWN');
+    if (invalidManifest) throw new Error(`${invalidManifest.code}: ${invalidManifest.mensagem}`);
+    fs.mkdirSync(paths.outputDir, { recursive: true });
     this.applyChanges(result.changes);
     const written = result.changes.map((change) => path.relative(root, change.file));
     fs.mkdirSync(paths.cacheDir, { recursive: true });

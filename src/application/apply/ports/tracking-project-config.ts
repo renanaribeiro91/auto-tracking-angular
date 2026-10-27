@@ -10,6 +10,7 @@ export interface StaticTrackingConfig {
   readonly root: string;
   readonly product: string;
   readonly hasPreset: boolean;
+  readonly mode: 'classic' | 'ref';
   readonly configFile: string;
   readonly hasBranding: boolean;
   readonly branding: { readonly logoPng?: string; readonly watermarkPng?: string; readonly primaryColor?: string };

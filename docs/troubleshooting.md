@@ -11,7 +11,7 @@
 | `projeto ... não existe no angular.json` | Compare `angularProject` com a chave em `angular.json`. | Corrija o nome do projeto e o `tsconfig`. |
 | `output inválido` | Veja se a saída está dentro da raiz e fora de `src`, `dist` e `node_modules`. | Use `.auto-tracking` ou outro diretório próprio. |
 | Falha ao carregar logo ou marca-d'água | Confirme a existência dos PNGs nos caminhos definidos em `branding`. | Use caminhos relativos à raiz do consumidor, dentro de `src/assets` se essa pasta existir. |
-| `marcação pendente` no `verify` | Compare o template com os atributos `data-at-*` esperados. | Execute `npm run tracking` e confirme a segunda execução idempotente. |
+| `marcação pendente` no `verify` | Confira se `runtime.mode` coincide com os HTMLs (`classic`: atributos; `ref`: token `v1.`). | Execute `npm run tracking` e confirme a segunda execução idempotente. |
 | Relatório ou planilha desatualizados | Confira mudanças em templates, dependências, branding ou versão do gerador. | Execute `npm run tracking` e inclua os artefatos atualizados no commit. |
 
 ## Build Angular usando npm link
@@ -23,7 +23,7 @@ Se aparecer `Can't resolve rxjs`, `rxjs/operators` ou `@angular/platform-browser
 | Código | Significado | Como agir |
 |---|---|---|
 | `BOOTSTRAP_PROVIDER_MISSING` | Não existe registro verificável de `provideAutoTracking` para o projeto. | Registre o provider no módulo/bootstrapping correto. |
-| `SCREEN_MARKER_NOT_PLACEABLE` | A tela roteada não expõe um elemento renderizado seguro para `data-at-screen`. | Ajuste a estrutura do template, sem marcar `ng-template` como tela física. |
+| `SCREEN_MARKER_NOT_PLACEABLE` | A tela roteada não expõe um elemento renderizado seguro para o marcador de tela do modo escolhido. | Ajuste a estrutura do template, sem marcar `ng-template` como tela física. |
 | `INLINE_TEMPLATE_INTERPOLATED` | O template TypeScript contém interpolação que impede edição estática segura. | Use `templateUrl` ou um literal estático. |
 | `ROUTED_COMPONENT_AMBIGUOUS` | A rota não resolve inequivocamente para um componente. | Utilize uma referência/importação explícita à classe correta. |
 | `VISIBLE_LABEL_BEHAVIOR_CONFLICT` | O texto visível sugere ação oposta ao handler. | Confira a semântica do componente; o motor não inventa significado pelo nome. |
@@ -34,7 +34,10 @@ Bindings sem `@Output` público comprovado ou sem gesto DOM rastreável estão *
 
 | Sintoma | Verificação |
 |---|---|
-| Nenhum evento enviado | Confirme `provideAutoTracking`, o elemento com `data-at-id`/`data-at-owner`, a identidade resolvida e o callback `send`. |
+| Nenhum evento enviado | Confirme `provideAutoTracking`, `runtime.mode`, a instrumentação correspondente (`data-at-id` em `classic` ou token válido `data-at-ref` em `ref`), a identificação de ambiente e o callback `send`. |
+| Token `data-at-ref` inválido | Tokens `v1.` são autocontidos; nenhum relatório é consultado em runtime. Regenere com CLI da mesma versão; não copie os tokens entre projetos. |
+| `TRACKING_REFERENCE_UNKNOWN` | A configuração/HTML mistura modos ou contém uma referência de versão desconhecida; faça backup, remova externamente o atributo antigo e regenere no modo desejado. |
+| `OPTION_ACCESSIBLE_SOURCE_MISSING` | Uma opção dinâmica comprovada precisa de `aria-label` acessível no elemento; não crie atributo técnico para transportar o valor. |
 | `ambiente não resolvido` | Adicione ao preset externo apenas o ID nativo ou tema Web comprovado no aplicativo. |
 | `rejeitado pelo schema` | Confira os campos obrigatórios e permitidos em `trackingPreset.schema`. |
 | `falha no envio` | Inspecione o adaptador de analytics injetado pelo aplicativo. O motor não substitui o transporte. |

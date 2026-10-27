@@ -1,6 +1,6 @@
 # auto-tracking-angular
 
-Biblioteca de rastreamento de interações para aplicações Angular e Ionic. O comando `auto-tracking` analisa os templates e gera atributos `data-at-*` nos pontos em que existe evidência de um gesto observável. Em execução, `provideAutoTracking` identifica o gesto, valida o contrato de evento informado pelo aplicativo e chama o adaptador de analytics configurado.
+Biblioteca de rastreamento de interações para aplicações Angular e Ionic. O comando `auto-tracking` analisa os templates e gera **marcações `classic` ou tokens autocontidos `ref`, conforme `runtime.mode`** nos pontos em que existe evidência de um gesto observável. Em execução, `provideAutoTracking` identifica o gesto, valida o contrato de evento informado pelo aplicativo e chama o adaptador de analytics configurado.
 
 O pacote **não** contém regras de marcas, listas de aplicativos, nomes de produtos ou credenciais. Cada consumidor define essas informações em um `TrackingPreset` próprio.
 
@@ -23,7 +23,7 @@ Isso não equivale a certificar o comportamento de todo componente externo. Even
 
 ## Instalação e desenvolvimento local
 
-Para instalar uma versão publicada, use `npm install auto-tracking-angular`. Durante o desenvolvimento da biblioteca e dos aplicativos na mesma máquina, use **npm link**; não copie `.tgz` para os consumidores.
+Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão do contrato com `data-at-ref` estará disponível a partir da `1.0.6` após aprovação no npm. Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
 
 Na pasta da biblioteca:
 
@@ -91,6 +91,7 @@ export default defineAutoTrackingProject({
     root: "app-root",
     product: "produto",
     preset: trackingPreset,
+    mode: 'ref', // 'ref' (token autocontido) ou 'classic' (atributos completos)
     getWebTheme: () => "padrao",
     send: (event, injector: Injector) => injector.get(AnalyticsService).trackEvent(event),
   },
@@ -120,7 +121,7 @@ No `package.json` do consumidor, adicione:
   "scripts": {
     "tracking": "auto-tracking",
     "tracking:verify": "auto-tracking verify",
-    "tracking:link": "npm link auto-tracking-angular --legacy-peer-deps"
+    "tracking:install": "npm install auto-tracking-angular@1.0.6 --save-exact --legacy-peer-deps --registry=https://registry.npmjs.org/"
   }
 }
 ```
@@ -139,11 +140,11 @@ Códigos de saída: `0` válido, `1` pendências estruturais ou marcações/evid
 
 | Arquivo                                     | Finalidade                                                                        |
 | ------------------------------------------- | --------------------------------------------------------------------------------- |
-| `.auto-tracking/relatorio.json`             | Entradas rastreadas e diagnósticos reais.                                         |
+| `.auto-tracking/relatorio.json`             | Evidências: `entries[]` (cada evento com `ref` no modo ref) e `diagnostics[]`.      |
 | `.auto-tracking/evidencia-tagueamento.xlsx` | Aba **Resumo**, abas por módulo, filtros, links internos e marca visual opcional. |
 | `.auto-tracking/cache/estado.json`          | Assinatura das entradas, do motor e das evidências para reconciliar mudanças.     |
 
-Se mudar um binding, output, identidade, rota ou atributo `data-at-*`, o CLI reanalisa o projeto e reconcilia atributos derivados. IDs manuais existentes são preservados quando continuam válidos. A primeira execução depois de uma mudança pode atualizar relatório e planilha; a seguinte deve escrever zero arquivos.
+Se mudar um binding, output, identidade, rota ou atributo `data-at-*`, o CLI reanalisa o projeto e reconcilia atributos derivados. O gerador se baseia no código-fonte e nos bindings reais para determinar os eventos e as referências; IDs não dependem de arquivos ou diretórios temporários. A primeira execução depois de uma mudança pode atualizar relatório e planilha; a seguinte deve escrever zero arquivos.
 
 A imagem de marca-d’água do consumidor é convertida num **padrão diagonal discreto e repetível**, usado exclusivamente como **fundo nativo da planilha XLSX**. O fundo não é um desenho flutuante: não pode ser arrastado, não bloqueia células e não reduz a nitidez dos textos. O Resumo utiliza margens laterais simétricas, com conteúdo centralizado no espaço útil. **Compatibilidade:** o Excel suporta o fundo nativo em tela; o Numbers pode ignorar fundos de planilhas XLSX importadas. Para garantir uma aparência idêntica no Numbers seria necessário um documento `.numbers` com fundo configurado no próprio aplicativo; a biblioteca não adiciona imagens flutuantes como alternativa.
 
@@ -158,7 +159,16 @@ npm test -- --runInBand     # suíte completa em execução sequencial
 
 O script `lint` existente também executa apenas `tsc --noEmit`; não representa uma verificação ESLint. Um linter independente pode ser introduzido somente com configuração e dependências próprias.
 
-A fonte da versão publicada é `package.json`. O comando `npm run check` valida a biblioteca antes da publicação; `npm publish --access public` executa o gate `prepublishOnly`. `npm run release` gera um pacote local para validação, sem publicar automaticamente no registry. O preset externo tem seu próprio `id` e `version`; atualize essa versão somente quando seu contrato mudar.
+A fonte da versão publicada é `package.json`. Para publicar com segurança, faça commit da versão aprovada, autentique-se com `npm login --auth-type=web` e execute:
+
+```bash
+npm run publish:npm                 # prepara a versão atual para aprovação npm
+npm run publish:npm -- patch        # incrementa patch e prepara a próxima versão
+npm stage list auto-tracking-angular # consulta o ID da versão em revisão
+npm stage approve ID_DO_STAGE      # substitua pelo ID real; aprova com 2FA
+```
+
+O script **não envia automaticamente ao público sem 2FA**: ele executa `npm stage publish`, que aplica `prepublishOnly` (`npm run check`), e recusa árvore Git suja, versão já publicada ou em estágio. Para `patch/minor/major`, a atualização do `package.json` e do lockfile fica local; revise e faça commit também da nova versão. `npm run release` continua gerando apenas artefato local, sem publicar. O preset externo possui `id` e `version` próprios, independentes da versão npm.
 
 ## Leitura complementar
 
@@ -168,3 +178,48 @@ A fonte da versão publicada é `package.json`. O comando `npm run check` valida
 - [Resolução de problemas](docs/troubleshooting.md) — falhas do CLI, de build e do envio de eventos.
 
 **Licenciamento:** esta distribuição está marcada como `UNLICENSED` enquanto não for adotada uma licença pública pelo titular dos direitos. Visibilidade pública e instalação pelo npm não concedem licença de reutilização ou redistribuição do código.
+
+## Modos de instrumentação
+
+A seleção é feita **no `runtime` do arquivo `auto-tracking.config.ts`**, lida estaticamente pelo CLI e usada pelo mesmo `provideAutoTracking` no navegador:
+
+```ts
+runtime: {
+  mode: 'ref', // ou 'classic' — o padrão, para projetos existentes
+  owner: 'app', root: 'app-root', product: 'produto', preset: trackingPreset,
+  send: (event, injector) => injector.get(AnalyticsService).trackEvent(event),
+}
+```
+
+### `mode: 'ref'` (FED/MOB)
+
+```html
+<button (click)="excluir()" data-at-ref="v1.eJ...">Excluir {{ pessoa.nome }}</button>
+```
+
+`v1.eJ...` é **ilustrativo**, não um token real. O token real contém todos os metadados necessários para gerar o evento: owner, funcionalidade, tela, screen_view, ID, gesto, rótulo-fallback, `@Output`, seletor e regras de opção selecionada. O CLI cria um token **determinístico**, versionado e compactado com DEFLATE, seguro para atributos HTML. Não é criptografia nem um hash irreversível; não coloque segredos no token. O runtime decodifica na primeira leitura e usa cache LRU limitado nos eventos seguintes. Ele continua observando o DOM e Shadow DOM, obtendo rótulos e opções dinâmicas no instante do gesto.
+
+**Não há `trackingManifest`, importação de relatório, fetch de JSON nem outro arquivo de lookup no navegador.** O runtime recebe apenas o token do próprio HTML; valida os parâmetros com o schema e chama `send`. O aplicativo é responsável por conectar `send` ao AnalyticsAdapter/Firebase. Se token, owner, ambiente ou schema não forem válidos, o evento não é enviado.
+
+No `relatorio.json`, `entries[]` conserva o ID completo, a referência autocontida `ref`, a ação, o contexto, arquivo, linha e telas alcançáveis. A planilha Excel preserva o formato atual, **sem coluna `ref`**. A referência não é o nome do evento enviado.
+
+### `mode: 'classic'` (compatibilidade original)
+
+```html
+<button (click)="excluir()" data-at-id="pessoas-excluir" data-at-owner="app"
+        data-at-funcionalidade="pessoas" data-at-tela="lista"
+        data-at-elemento="botao" data-at-rotulo="excluir">Excluir</button>
+```
+
+O CLI e o runtime continuam usando os atributos `data-at-*` antigos, incluindo outputs no formato `id|evento|seletor|rótulo|output` e opções de seleção. **O padrão é `classic`**, evitando mudanças silenciosas em aplicativos que já utilizam o pacote. Cada consumidor deve gerar e executar o **mesmo modo**; não misture `classic` e `ref` na mesma configuração.
+
+### Fluxo seguro
+
+```bash
+npm run tracking                  # gera HTML + JSON + XLSX a partir de evidência Angular
+npm run tracking                  # deve gravar 0 arquivos
+npm run tracking:verify           # deve retornar 0 pendências / 0 diagnósticos
+npm run check                     # na biblioteca: tipagem, pacote e testes
+```
+
+Para mudar de `classic` para `ref`, primeiro remova as **marcações antigas** do HTML externamente à biblioteca, sem tocar nos handlers Angular ou templates de negócio; selecione o novo modo e regenere as evidências. O gerador não deve adivinhar IDs a partir de referências inválidas. Faça backup antes da limpeza e valide no aplicativo com o runtime da mesma versão.

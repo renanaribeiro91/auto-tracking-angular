@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { screenIdentity } from '../../src/application/apply/pipeline.js';
+import { ScreenIdentityResolver } from '../../src/application/apply/screen-identity-resolver.js';
+import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 import { TrackingPipelineFactory } from '../../src/cli/tracking-pipeline-composition.js';
 
 function write(root: string, rel: string, text: string): void {
@@ -33,7 +35,7 @@ describe('pipeline apply/verify ponta a ponta', () => {
     write(root, 'node_modules/lib-ui/fesm2022/lib-ui.mjs', APF);
     write(root, 'auto-tracking.config.ts', `export default defineAutoTrackingProject({
       projects: [{ angularProject: 'app', tsconfig: 'tsconfig.app.json' }],
-      runtime: { owner: 'mob', root: 'app-root', product: 'saude', preset: examplePreset, send: () => {} } });`);
+      runtime: { owner: 'mob', root: 'app-root', product: 'saude', preset: examplePreset, mode: 'ref', send: () => {} } });`);
     write(root, 'src/app/app.module.ts', 'export const p = [provideAutoTracking(tracking.runtime)];');
     write(root, 'src/app/features/reembolso/common/enums/reembolso.enum.ts', 'export enum R {}');
     write(root, 'src/app/common/constants/app.constants.ts', 'export const A = 1;');
@@ -53,7 +55,9 @@ export class AjudaModal { fechar() {} }`);
 
   const apply = () => {
     const r = runPipeline(root, cfg);
-    for (const c of r.changes) fs.writeFileSync(c.file, c.after);
+    for (const c of r.changes) { fs.mkdirSync(path.dirname(c.file), { recursive: true }); fs.writeFileSync(c.file, c.after); }
+    fs.mkdirSync(r.paths.outputDir, { recursive: true });
+    fs.writeFileSync(r.paths.relatorioFile, r.relatorio);
     return r;
   };
 
@@ -62,6 +66,38 @@ export class AjudaModal { fechar() {} }`);
     expect(screenIdentity(src, path.join(src, 'app/features/reembolso/tipo/tipo.page.html'))).toEqual({ funcionalidade: 'reembolso', tela: 'tipo' });
     expect(screenIdentity(src, path.join(src, 'app/features/onboarding/onboarding.page.html'))).toEqual({ funcionalidade: 'onboarding', tela: 'onboarding' });
     expect(screenIdentity(src, path.join(src, 'lib/modules/saude-equilibrio/pages/agendamentos/agendamentos.page.html'))).toEqual({ funcionalidade: 'saude-equilibrio', tela: 'agendamentos' });
+  });
+
+  it('ignora pasta vazia/gerada ao escolher a funcionalidade; usa apenas fontes reais', () => {
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'at-identity-'));
+    try {
+      const source = path.join(localRoot, 'src');
+      const template = path.join(source, 'app/features/reembolso/incluir-mais-procedimentos/procedimento2/procedimento2.page.html');
+      const common = path.join(source, 'app/features/reembolso/common/constants');
+      fs.mkdirSync(path.join(common, '.omc/state'), { recursive: true });
+      const withoutSource = screenIdentity(source, template);
+      fs.rmSync(path.join(common, '.omc'), { recursive: true });
+      expect(screenIdentity(source, template)).toEqual(withoutSource);
+      write(localRoot, 'src/app/features/reembolso/common/constants/eventos.ts', 'export const eventos = {};');
+      expect(screenIdentity(source, template)).toEqual({ funcionalidade: 'reembolso', tela: 'procedimento2' });
+    } finally { fs.rmSync(localRoot, { recursive: true, force: true }); }
+  });
+
+  it('identifica módulo Angular roteado sem depender de subpastas geradas', () => {
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'at-identity-'));
+    try {
+      const source = path.join(localRoot, 'src');
+      const template = path.join(source, 'app/features/reembolso/incluir-mais-procedimentos/procedimento2/procedimento2.page.html');
+      write(localRoot, 'src/app/features/reembolso/reembolso.module.ts', 'export class ReembolsoModule {}');
+      write(localRoot, 'src/app/features/reembolso/reembolso.routing.ts', 'export const routes = [];');
+      const resolve = () => new ScreenIdentityResolver().resolve(source, template, 0, '', true);
+      const first = resolve();
+      write(localRoot, 'src/app/features/reembolso/incluir-mais-procedimentos/common/constants/.omc/state/cache.json', '{}');
+      expect(first).toEqual({ funcionalidade: 'reembolso', tela: 'procedimento2' });
+      expect(resolve()).toEqual(first);
+      fs.rmSync(path.join(source, 'app/features/reembolso/incluir-mais-procedimentos/common'), { recursive: true });
+      expect(resolve()).toEqual(first);
+    } finally { fs.rmSync(localRoot, { recursive: true, force: true }); }
   });
 
   it('usa o caminho completo para separar identidades que continuam colidindo após os refinamentos usuais', () => {
@@ -74,9 +110,15 @@ export class AjudaModal { fechar() {} }`);
 
   it('mapeia saída de biblioteca APF e resolve a tela de componentes compartilhados e modais', () => {
     const r = apply();
-    expect(fs.readFileSync(path.join(root, 'src/app/features/reembolso/tipo/tipo.page.html'), 'utf-8')).toContain(
-      'data-at-outputs="reembolso-tipo-voltar|click|#btnVoltar|voltar|voltar"',
-    );
+    const template = fs.readFileSync(path.join(root, 'src/app/features/reembolso/tipo/tipo.page.html'), 'utf-8');
+    expect(template).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
+    const ref = /data-at-ref="([^"]+)"/.exec(template)![1]!;
+    expect(decodeTrackingToken(ref)?.outputs).toEqual([
+      { id: 'reembolso-tipo-voltar', event: 'click', selector: '#btnVoltar', label: 'voltar', output: 'voltar' },
+    ]);
+    expect(r.entries.find((e) => e.id === 'reembolso-tipo-voltar')?.ref).toBe(ref);
+    expect((JSON.parse(fs.readFileSync(path.join(root, '.auto-tracking/relatorio.json'), 'utf8')) as { entries: Array<{ ref?: string }> }).entries.some((entry) => entry.ref === ref)).toBe(true);
+    expect(fs.existsSync(path.join(root, '.auto-tracking/tracking-manifest.generated.ts'))).toBe(false);
     const card = r.entries.find((e) => e.arquivo.endsWith('card.component.ts'))!;
     const modal = r.entries.find((e) => e.arquivo.endsWith('ajuda.modal.ts'))!;
     expect(card.telas).toEqual(['reembolso:tipo']);
@@ -122,6 +164,17 @@ export class ${cls} { ok() {} }`);
     expect(telas).toEqual(['vacina:resumo', 'viagem:resumo']);
   });
 
+  it('modo ref é autocontido, relatório contém ref por evento e a segunda execução é idempotente', () => {
+    const first = apply();
+    const report = JSON.parse(first.relatorio) as { entries: Array<{ ref?: string }> };
+    expect(report.entries.every((entry) => entry.ref && decodeTrackingToken(entry.ref))).toBe(true);
+    expect('trackingManifest' in report).toBe(false);
+    expect(fs.existsSync(path.join(root, '.auto-tracking/tracking-manifest.generated.ts'))).toBe(false);
+    const second = runPipeline(root, cfg);
+    expect(second.changes).toHaveLength(0);
+    expect(second.relatorio).toBe(first.relatorio);
+  });
+
   it('segunda execução: zero mudanças e relatório idêntico', () => {
     const first = runPipeline(root, cfg);
     const second = runPipeline(root, cfg);
@@ -136,19 +189,24 @@ export class ${cls} { ok() {} }`);
       apply();
       const trackedFile = path.join(root, 'src/app/shared/components/card/card.component.ts');
       const templateBefore = fs.readFileSync(trackedFile, 'utf-8');
-      const existingId = /data-at-id=["']([^"']+)["']/.exec(templateBefore)?.[1];
+      const beforeRef = /data-at-ref=["']([^"']+)["']/.exec(templateBefore)?.[1];
+      expect(beforeRef).toBeDefined();
+      const existingId = decodeTrackingToken(beforeRef!)?.click?.id;
       expect(existingId).toBeDefined();
 
       write(root, 'auto-tracking.config.ts', configBefore.replace("owner: 'mob'", "owner: 'mfe-exemplo'"));
       const migration = runPipeline(root, cfg);
       const taggedTemplate = migration.changes.find((change) => change.file === trackedFile)?.after ?? fs.readFileSync(trackedFile, 'utf-8');
 
-      expect(taggedTemplate).toMatch(new RegExp(`data-at-id=["']${existingId}["']`));
-      expect(taggedTemplate).toMatch(/data-at-owner=["']mfe-exemplo["']/);
+      const migratedRef = /data-at-ref=["']([^"']+)["']/.exec(taggedTemplate)?.[1];
+      expect(migratedRef).toBeDefined();
+      expect(decodeTrackingToken(migratedRef!)?.click?.id).toBe(existingId);
+      expect(decodeTrackingToken(migratedRef!)?.owner).toBe('mfe-exemplo');
       expect(migration.entries.every((entry) => entry.owner === 'mfe-exemplo')).toBe(true);
       expect(JSON.parse(migration.relatorio).entries.every((entry: { owner: string }) => entry.owner === 'mfe-exemplo')).toBe(true);
 
       for (const change of migration.changes) fs.writeFileSync(change.file, change.after);
+      fs.writeFileSync(path.join(root, '.auto-tracking/relatorio.json'), migration.relatorio);
       const second = runPipeline(root, cfg);
       expect(second.changes).toHaveLength(0);
       expect(second.relatorio).toBe(migration.relatorio);

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 
 describe('CLI: cache conserva prova e status', () => {
   let root: string;
@@ -22,7 +23,7 @@ describe('CLI: cache conserva prova e status', () => {
     write('package.json', JSON.stringify({ dependencies: { 'lib-ui': '1.0.0' } }));
     write('auto-tracking.config.ts', `export default defineAutoTrackingProject({
       projects: [{ angularProject: 'app', tsconfig: 'tsconfig.app.json' }],
-      runtime: { owner: 'app', root: 'app-root', product: 'saude', preset: examplePreset, send: () => {} }
+      runtime: { owner: 'app', root: 'app-root', product: 'saude', preset: examplePreset, mode: 'ref', send: () => {} }
     });`);
     write('src/app.ts', `@Component({selector: 'app-root', templateUrl: './app.html'}) export class App {}
       const routes = [{ path: '', component: App }]; const providers = [provideAutoTracking(config.runtime)];`);
@@ -35,18 +36,35 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli().cache).toBe('hit');
     const file = path.join(root, 'src/app.html');
     const original = fs.readFileSync(file, 'utf8');
-    fs.writeFileSync(file, original.replace(/data-at-owner="[^"]+"/, 'data-at-owner="errado"'));
+    const ref = /data-at-ref="([^"]+)"/.exec(original)![1]!;
+    const reportFile = path.join(root, '.auto-tracking/relatorio.json');
+    const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+    const preservedId = decodeTrackingToken(ref)?.click?.id;
+    expect(preservedId).toBeTruthy();
+    // O HTML não carrega mais metadados estáticos, somente a referência.
+    fs.writeFileSync(file, original.replace(ref, 'e-referenciainvalida'));
     expect(cli('verify').status).toBe('incomplete');
+    fs.writeFileSync(file, original);
     expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toContain('data-at-owner="app"');
-    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/data-at-id="[^"]+"/, ''));
-    expect(cli('verify').status).toBe('incomplete');
-    expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toMatch(/data-at-id="[^"]+"/);
-    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/data-at-id="[^"]+"/, 'data-at-id="id-personalizado"'));
-    expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toContain('data-at-id="id-personalizado"');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    expect(decodeTrackingToken(ref)?.click?.id).toBe(preservedId);
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
+  });
+
+  it('modo classic preserva atributos originais e relatório sem ref', () => {
+    const config = path.join(root, 'auto-tracking.config.ts');
+    fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace("mode: 'ref'", "mode: 'classic'"));
+    write('src/app.html', '<button (click)="salvar()">Salvar</button>');
+    const result = cli();
+    expect(result).toMatchObject({ status: 'valid', exit: 0 });
+    const html = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
+    expect(html).toContain('data-at-id=');
+    expect(html).toContain('data-at-owner="app"');
+    expect(html).not.toContain('data-at-ref=');
+    const report = JSON.parse(fs.readFileSync(path.join(root, '.auto-tracking/relatorio.json'), 'utf8'));
+    expect(report.entries.length).toBeGreaterThan(0);
+    expect(report.entries.every((entry: { ref?: string }) => entry.ref === undefined)).toBe(true);
+    expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0 });
   });
 
   it('um aviso mantém o mesmo status com e sem cache', () => {
@@ -89,15 +107,20 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli().status).toBe('valid');
     const file = path.join(root, 'src/app.html');
     const original = fs.readFileSync(file, 'utf8');
-    expect(original).toContain('|click|#real|');
-    fs.writeFileSync(file, original.replace('|click|#real|', '|click|#falso|'));
+    expect(original).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
+    const manifestFile = path.join(root, '.auto-tracking/relatorio.json');
+    const report = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const ref = /data-at-ref="([^"]+)"/.exec(original)![1]!;
+    expect(decodeTrackingToken(ref)?.outputs?.[0]?.selector).toBe('#real');
+    fs.writeFileSync(file, original.replace(ref, 'v1.invalido'));
+    expect(cli('verify').status).toBe('incomplete');
+    // Não inventar um novo ID quando falta a referência: restaurar o valor válido.
+    fs.writeFileSync(file, original);
+    expect(cli().status).toBe('valid');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/ data-at-ref="[^"]+"/, ''));
     expect(cli('verify').status).toBe('incomplete');
     expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toContain('|click|#real|');
-    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/ data-at-outputs="[^"]+"/, ''));
-    expect(cli('verify').status).toBe('incomplete');
-    expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toContain('|click|#real|');
+    expect(fs.readFileSync(file, 'utf8')).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
 
@@ -115,11 +138,13 @@ describe('CLI: cache conserva prova e status', () => {
     expect(changed.status).toBe('valid');
     expect(changed.diagnosticos).toBe(0);
     html = fs.readFileSync(file, 'utf8');
-    expect(html).not.toContain('data-at-outputs');
+    const newRef = /data-at-ref="([^"]+)"/.exec(html)?.[1];
+    const descriptor = newRef ? decodeTrackingToken(newRef) : undefined;
+    expect(descriptor?.outputs).toBeUndefined();
     fs.writeFileSync(file, html.replace('(naoExiste)="save()"', '(ok)="save()"'));
     expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1 });
     expect(cli().status).toBe('valid');
-    expect(fs.readFileSync(file, 'utf8')).toContain('|click|#real|');
+    expect(fs.readFileSync(file, 'utf8')).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
 
@@ -135,7 +160,10 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1 });
     const updated = cli();
     expect(updated.status).toBe('valid');
-    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toContain('#after');
+    const html = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
+    const ref = /data-at-ref="([^"]+)"/.exec(html)![1]!;
+    const report = JSON.parse(fs.readFileSync(path.join(root, '.auto-tracking/relatorio.json'), 'utf8'));
+    expect(decodeTrackingToken(ref)?.outputs?.[0]?.selector).toBe('#after');
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
 });

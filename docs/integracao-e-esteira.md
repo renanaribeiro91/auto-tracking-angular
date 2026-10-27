@@ -4,11 +4,11 @@ O consumidor é responsável pelo preset, pelas imagens da planilha, pelo adapta
 
 ## O que configurar
 
-1. Instale a biblioteca no ambiente de desenvolvimento por `npm link` ([passo a passo](uso-local-sem-esteira.md)).
+1. Instale a biblioteca publicada via npm (preferido) ou use `npm link` somente no desenvolvimento local ([passo a passo](uso-local-sem-esteira.md)).
 2. Defina `tracking-preset.ts` no aplicativo. Mantenha o schema dos eventos e os mapas de ambiente ao lado do código que conhece os IDs de bundle e os temas Web.
-3. Declare `auto-tracking.config.ts` na raiz. A configuração deve conter literais para `projects`, `output`, `branding` e `runtime.owner/root/product`; o CLI lê os dados por AST sem executar efeitos colaterais.
+3. Declare `auto-tracking.config.ts` na raiz, incluindo `runtime.mode: 'ref'` ou `'classic'` (padrão). A configuração deve conter literais para `projects`, `output`, `branding`, `runtime.mode` e `runtime.owner/root/product`; o CLI lê os dados por AST sem executar efeitos colaterais.
 4. Registre `provideAutoTracking(config.runtime)` no bootstrap ou no módulo exposto por cada MFE. O adaptador `send` e a função `getWebTheme` são resolvidos pelo injector do consumidor.
-5. Declare os scripts `tracking`, `tracking:verify` e `tracking:link`, conforme o [README](../README.md).
+5. Declare os scripts `tracking`, `tracking:verify` e `tracking:install` (com `tracking:link` apenas para desenvolvimento), conforme o [README](../README.md).
 
 ## Identidade e versões
 
@@ -27,11 +27,24 @@ npm run tracking:verify
 
 A primeira execução marca gestos comprovados e gera `.auto-tracking/relatorio.json`, `.auto-tracking/evidencia-tagueamento.xlsx` e `.auto-tracking/cache/estado.json`. A segunda deve escrever **zero arquivos**; o `verify` deve terminar com código `0`. Adicione ao commit as alterações deliberadas nos templates e nesses três artefatos.
 
-Mudanças relevantes de configuração, HTML, TypeScript da aplicação, metadados instalados de componentes, IDs ou outputs obrigam o motor a reanalisar as entradas. O cache não substitui a verificação: ele apenas evita reescrita desnecessária. IDs manuais válidos são preservados.
+Mudanças relevantes de configuração, HTML, TypeScript da aplicação, metadados instalados de componentes, IDs ou outputs obrigam o motor a reanalisar as entradas. O cache não substitui a verificação: ele apenas evita reescrita desnecessária. No modo `classic`, IDs manuais válidos são preservados. No modo `ref`, o token é autocontido, sem import de relatório no runtime; antes de trocar o modo, limpe externamente os atributos antigos mantendo handlers e HTML de negócio.
 
 ### O que conta como cobertura
 
 Um output por si só não é prova de um gesto. Se não houver produtor público ou um gesto DOM comprovável, o motor não cria marcação, alerta de analytics ou evento fictício. Isso vale também para inputs de digitação e eventos técnicos. Casos em que falta infraestrutura de runtime, como provider não registrado, continuam sendo falhas reais de integração.
+
+## Escolha do modo e entrega ao adaptador
+
+```ts
+runtime: {
+  mode: 'ref', // FED/MOB; troque por 'classic' se desejar os data-at-* originais
+  // owner, product, preset, getWebTheme e send permanecem no aplicativo
+}
+```
+
+`ref`: cada elemento tem somente `data-at-ref="v1.<token>"`. O CLI gera os dados no atributo, e o runtime o descompacta e guarda em cache. **Não há `trackingManifest`, import do relatório, arquivo TypeScript gerado ou requisição HTTP.** `classic`: comportamento original dos atributos completos. O runtime só processa o modo selecionado, impedindo emissão mista ou duplicada.
+
+O `send` recebe o mesmo evento validado nos dois modos e encaminha ao `AnalyticsAdapter.trackEvent(...)` fornecido pelo consumidor. Testes de biblioteca demonstram o contrato e os builds comprovam compilação, mas o Firebase real deve ser observado em um smoke de navegação/dispositivo antes do deploy.
 
 ## Builds de consumidores ligados por symlink
 

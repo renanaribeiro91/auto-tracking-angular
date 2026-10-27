@@ -8,6 +8,8 @@ import type { ComponentInfo, ProjectIndex } from './ports/project-index.js';
 import { ScreenIdentityResolver } from './screen-identity-resolver.js';
 import { ENGINE_VERSION } from './constants.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
+import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
+import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
 import type { TrackingPipelineDependencies } from './ports/tracking-pipeline-dependencies.js';
@@ -93,7 +95,7 @@ export class TrackingPipeline {
       const refineOf = new Map<ComponentInfo, 1 | 2 | 3>();
       const routedComponents = index.components.filter((component) => index.routedComponents.has(component.key));
       const identityFor = (component: ComponentInfo, refine: 0 | 1 | 2 | 3 = 0) =>
-        this.screenIdentityResolver.resolve(scanRoot, component.templateFile ?? component.tsFile, refine, refine === 3 ? component.className : '');
+        this.screenIdentityResolver.resolve(scanRoot, component.templateFile ?? component.tsFile, refine, refine === 3 ? component.className : '', index.routedComponents.has(component.key));
       for (const level of SCREEN_IDENTITY_REFINEMENT_LEVELS) {
         const seen = new Map<string, ComponentInfo[]>();
         for (const c of routedComponents) {
@@ -142,12 +144,16 @@ export class TrackingPipeline {
       const usedIds = new Set<string>(claimedIds);
       for (const text of original.values()) for (const m of text.matchAll(/data-at-(?:id|screen)=["']([^"']+)["']/g)) usedIds.add(m[1]!);
       for (const text of original.values()) {
-        for (const match of text.matchAll(/data-at-outputs=["']([^"']+)["']/g)) {
-          for (const output of match[1]!.split(';')) {
-            const id = output.split('|')[0];
-            if (id) usedIds.add(id);
-          }
+        for (const match of text.matchAll(/data-at-(?:overlay-)?outputs=["']([^"']+)["']/g)) {
+          for (const output of decodeOutputBindings(match[1])) usedIds.add(output.id);
         }
+        for (const match of text.matchAll(/data-at-ref=["']([^"']+)["']/g)) {
+          const element = decodeTrackingToken(match[1]!);
+          if (element?.screenId) usedIds.add(element.screenId);
+          if (element?.click) usedIds.add(element.click.id);
+          for (const output of [...(element?.outputs ?? []), ...(element?.overlayOutputs ?? [])]) usedIds.add(output.id);
+        }
+
       }
 
       for (const t of targets) {
@@ -167,6 +173,7 @@ export class TrackingPipeline {
           claimedIds,
           attrQuote: t.inline?.quote === '"' ? "'" : '"',
           lineOffset: t.inline?.line ?? 1,
+          mode: config.mode,
         });
         // componente raiz (casca do app) aparece em todas as telas
         const resolved = screensOf(t.c);

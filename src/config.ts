@@ -13,7 +13,11 @@ export interface TrackingPreset {
   readonly webThemeToEnvironment: Readonly<Record<string, string>>;
 }
 
+export type TrackingMode = 'classic' | 'ref';
+
 export interface TrackingOptions {
+  /** classic preserva os atributos originais (padrão); ref usa token autocontido. */
+  readonly mode?: TrackingMode;
   readonly owner: string;
   readonly root: string;
   readonly product: string;

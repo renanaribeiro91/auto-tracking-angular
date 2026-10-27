@@ -2,6 +2,7 @@
 import { installDomTracker, emitScreenView, type DomTrackerDeps } from '../../src/adapters/runtime/dom-tracker.js';
 import { examplePreset } from '../fixtures/preset/index.js';
 import type { TrackingEvent } from '../../src/config.js';
+import { encodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -70,6 +71,97 @@ describe('runtime: emissão no formato do Builder do time', () => {
     click('.acao');
     await flush();
     expect(fed.map((e) => e.params['rotulo'])).toEqual(['voltar', 'icone']);
+  });
+
+  it('modo ref: token autocontido envia screen_view, clique e output corretamente, sem manifesto', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const marker = document.querySelector('app-tipo ion-header')!;
+    const button = document.getElementById('fedBtn')!;
+    const header = document.getElementById('hdr')!;
+    for (const element of [marker, button, header]) {
+      for (const attr of Array.from(element.attributes)) if (attr.name.startsWith('data-at-')) element.removeAttribute(attr.name);
+    }
+    marker.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento', screenId: 't' }));
+    button.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      click: { id: 'anexar', event: 'click', elemento: 'botao', rotulo: 'anexar' } }));
+    header.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      outputs: [{ id: 'h-voltar', event: 'click', selector: '#btnVoltar', label: 'voltar', output: 'voltar' }] }));
+    const runtime = { ...deps('mfe-exemplo', fed), mode: 'ref' as const };
+    stops = [installDomTracker(document, runtime)];
+    expect(emitScreenView(document, 'app-tipo', runtime)).toBe(true);
+    await flush();
+    expect(fed[0]).toEqual({ name: 'screen_view', params: expect.objectContaining({ funcionalidade: 'reembolso' }) });
+    fed.length = 0;
+    button.setAttribute('aria-label', 'Excluir João');
+    click('#fedBtn');
+    button.setAttribute('aria-label', 'Excluir Maria');
+    click('#fedBtn');
+    click('#titulo'); // sem output de título
+    click('#btnVoltar');
+    await flush();
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['excluir-joao', 'excluir-maria', 'voltar']);
+    expect(fed.map((event) => event.name)).toEqual(['click', 'click', 'click']);
+    expect(button.outerHTML).not.toContain('data-at-id');
+  });
+
+  it('modo ref: opção dinâmica é obtida do aria-label validado', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const star = document.getElementById('fedBtn')!;
+    for (const attr of Array.from(star.attributes)) if (attr.name.startsWith('data-at-')) star.removeAttribute(attr.name);
+    star.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'avaliacao-video', tela: 'star-ranking',
+      click: { id: 'star-ranking-on-cliked', event: 'click', elemento: 'botao', rotulo: 'avaliar', opcaoPermitida: '1|2|3|4|5', opcaoFonte: 'aria-label-numero' } }));
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    star.setAttribute('aria-label', 'Avaliar com 4 estrelas');
+    click('#fedBtn');
+    star.setAttribute('aria-label', 'Avaliar com 2 estrelas');
+    click('#fedBtn');
+    await flush();
+    expect(fed.map((event) => event.params['opcao_selecionada_1'])).toEqual(['4', '2']);
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['avaliar-com-4-estrelas', 'avaliar-com-2-estrelas']);
+    expect(star.outerHTML).not.toContain('data-at-option');
+  });
+
+  it('modo ref: opção ambígua não é inventada', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const star = document.getElementById('fedBtn')!;
+    for (const attr of Array.from(star.attributes)) if (attr.name.startsWith('data-at-')) star.removeAttribute(attr.name);
+    star.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'avaliacao-video', tela: 'star-ranking',
+      click: { id: 'star-ranking-on-cliked', event: 'click', elemento: 'botao', rotulo: 'avaliar', opcaoPermitida: '1|2|3|4|5', opcaoFonte: 'aria-label-numero' } }));
+    star.setAttribute('aria-label', 'Notas 2 e 4 estrelas');
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    click('#fedBtn'); await flush();
+    expect(fed).toHaveLength(1);
+    expect(fed[0]!.params['opcao_selecionada_1']).toBeUndefined();
+  });
+
+  it('modo ref: token inválido nunca dispara e classic ignora o token', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const button = document.getElementById('fedBtn')!;
+    for (const attr of Array.from(button.attributes)) if (attr.name.startsWith('data-at-')) button.removeAttribute(attr.name);
+    button.setAttribute('data-at-ref', 'v1.invalido');
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    click('#fedBtn'); await flush();
+    expect(fed).toHaveLength(0);
+    stops.forEach((stop) => stop()); stops = [];
+    button.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      click: { id: 'anexar', event: 'click', elemento: 'botao', rotulo: 'anexar' } }));
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'classic' })];
+    click('#fedBtn'); await flush();
+    expect(fed).toHaveLength(0);
+  });
+
+  it('gestos compactados v2 mantêm a emissão e a identidade do evento', async () => {
+    const { encodeOutputBindings } = await import('../../src/domain/contract/output-bindings.js');
+    const host = document.getElementById('hdr')!;
+    host.setAttribute('data-at-outputs', encodeOutputBindings([
+      { id: 'h-voltar', event: 'click', selector: '#btnVoltar', label: 'voltar', output: 'voltar' },
+      { id: 'h-voltar', event: 'click', selector: '.acao', label: 'voltar', output: 'voltar' },
+      { id: 'h-voltar', event: 'click', selector: 'h1#titulo', label: 'voltar', output: 'voltar' },
+    ]));
+    expect(host.getAttribute('data-at-outputs')).toMatch(/^v2:/);
+    click('#btnVoltar');
+    await flush();
+    expect(fed.map((e) => e.params['rotulo'])).toEqual(['voltar']);
   });
 
   it('componente sem definição: emite só ao acionar elemento interativo interno', async () => {

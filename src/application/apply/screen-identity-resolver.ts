@@ -10,7 +10,7 @@ export interface ScreenIdentity {
 
 /** Resolve módulo e tela a partir da estrutura de pastas e do arquivo de template. */
 export class ScreenIdentityResolver {
-  resolve(scanRoot: string, template: string, refine: 0 | 1 | 2 | 3 = 0, discriminator = ''): ScreenIdentity {
+  resolve(scanRoot: string, template: string, refine: 0 | 1 | 2 | 3 = 0, discriminator = '', routed = false): ScreenIdentity {
     const fileName = slug(path.basename(template).replace(/\.(html|ts)$/, '').replace(/\.(page|component|modal|container|dialog|popover)$/, ''));
     const folderName = slug(path.basename(path.dirname(template)));
     const relativeFile = path.relative(scanRoot, template).split(path.sep).filter(Boolean);
@@ -22,9 +22,15 @@ export class ScreenIdentityResolver {
     const container = parts.findIndex((part) => SCREEN_CONTAINERS.has(part));
     const floor = path.join(scanRoot, ...parts.slice(0, container + 1));
 
+    // O primeiro nível preserva a funcionalidade da rota/módulo. Somente
+    // colisões reais permitem refinar a identidade para níveis mais específicos.
     if (refine === 0) {
       const moduleWithCommon = this.moduleWithCommonDirectory(telaDir, floor);
       if (moduleWithCommon) return { funcionalidade: slug(moduleWithCommon), tela };
+      if (routed) {
+        const namedRouting = this.namedRoutingBoundary(telaDir, floor);
+        if (namedRouting) return { funcionalidade: slug(namedRouting), tela };
+      }
     }
 
     const telaFolder = parts[parts.length - 1];
@@ -41,7 +47,36 @@ export class ScreenIdentityResolver {
     return null;
   }
 
+  /** Sem diretórios de contrato, usa evidência de módulo Angular roteado,
+   *  nunca estruturas vazias criadas por ferramentas locais. */
+  private namedRoutingBoundary(telaDir: string, floor: string): string | null {
+    for (let directory = path.dirname(telaDir); directory.length > floor.length && directory.startsWith(floor); directory = path.dirname(directory)) {
+      const name = path.basename(directory);
+      // Comum em módulos lazy: arquivo de rotas e NgModule correspondentes.
+      if (fs.existsSync(path.join(directory, `${name}.routing.ts`))
+        && fs.existsSync(path.join(directory, `${name}.module.ts`))) return name;
+    }
+    const relative = path.relative(floor, telaDir).split(path.sep);
+    const first = relative[0];
+    if (path.basename(floor) === 'modules' && first
+      && fs.existsSync(path.join(floor, first, `${first}.module.ts`))) return first;
+    return null;
+  }
+
   private hasCommonDirectory(directory: string, name: 'constants' | 'enums'): boolean {
-    return fs.existsSync(path.join(directory, 'common', name));
+    const commonPath = path.join(directory, 'common', name);
+    // A presença da pasta não é evidência de código: ferramentas podem criar
+    // diretórios vazios/ignorados em qualquer máquina sem mudar o aplicativo.
+    // Apenas arquivos-fonte diretos (incluídos no inventário TS) justificam
+    // usar esta fronteira para determinar a funcionalidade da tela.
+    try {
+      return fs.readdirSync(commonPath, { withFileTypes: true }).some((entry) =>
+        entry.isFile() && /\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)
+        && !/\.(?:spec|test)\.[cm]?[jt]sx?$/.test(entry.name)
+        && !entry.name.endsWith('.d.ts'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
   }
 }

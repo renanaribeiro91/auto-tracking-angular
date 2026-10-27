@@ -36,7 +36,7 @@ Seletores internos devem identificar a mesma ação em todos os elementos que al
 
 ## Compatibilidade com bibliotecas de componentes
 
-O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵngDeclareComponent`) e Web Components Stencil pelo `dist/docs.json` instalado. No caso Stencil, somente eventos com `bubbles: true` e `composed: true` são considerados observáveis por delegação; evento público não equivale automaticamente a clique de negócio. O runtime instala listeners dos eventos realmente presentes em `data-at-event`/`data-at-outputs`, sem tabela fixa de marcas ou versões.
+O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵngDeclareComponent`) e Web Components Stencil pelo `dist/docs.json` instalado. No caso Stencil, somente eventos com `bubbles: true` e `composed: true` são considerados observáveis por delegação; evento público não equivale automaticamente a clique de negócio. No modo `classic` o runtime instala listeners para `data-at-event` e `data-at-outputs`; no modo `ref` decodifica o token de `data-at-ref` uma vez (cache LRU) e instala listeners para os gestos nele descritos.
 
 - Inputs nativos e controles de **digitação** do Design System não geram ações de analytics por foco, blur, input, teclas ou alteração de texto. Um componente composto com `input` no nome, como um card de documento ou chip removível, **não** é excluído sem verificar seu gesto real.
 - `click`, navegação, seleção de uma opção e comandos públicos de botões podem ser rastreados quando o fluxo DOM→componente→owner é comprovado. Outputs de estado, dismiss, abertura ou transição não são cliques apenas por terem sido emitidos.
@@ -44,7 +44,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 - Overlays explicitamente marcados carregam sua tela/owner de origem; uma tela global de outro MFE não pode atribuir um clique a uma origem diferente. Sem origem confiável, o runtime não envia.
 - A validação de compatibilidade deve usar a versão **resolvida em node_modules** e testar, além de `apply × 2`/`verify`, CustomEvents com owner concorrente, inputs excluídos, eventos técnicos ignorados e overlays com/sem origem. Testes de unidade não equivalem a certificação E2E.
 
-## Contrato dos atributos
+## Contrato de atributos do modo `classic`
 
 | Atributo | Onde | Valor |
 |---|---|---|
@@ -59,7 +59,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 **Reconciliação:**
 - IDs e rótulos existentes são preservados; ajustes manuais nesses valores são suportados.
 - `data-at-owner`, funcionalidade e tela são derivados da configuração/estrutura atuais e sempre são reconciliados pelo comando.
-- Atributos ausentes são repostos.
+- Atributos ausentes são repostos no modo `classic`; em `ref`, apenas o token inteiro é recalculado quando o contrato semântico muda.
 - Um atributo sem prova atual sai do template: o handler foi removido, o componente deixou de ser roteado ou o atributo foi descontinuado.
 
 ### Derivação (válida para qualquer projeto Angular)
@@ -67,7 +67,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 - **Tela** (`data-at-tela`): nome do arquivo da tela, sem `.page`/`.component`.
 - **Módulo** (`data-at-funcionalidade`, aba da planilha): a pasta mais próxima acima da tela que tenha `common/constants` ou `common/enums` (padrão do time); sem ela, a pasta-mãe da tela. Pastas técnicas do Angular/Ionic (`pages`, `components`, `modals`, `shared`, `core`, `containers`, `features`…) nunca viram módulo.
 - **Unicidade**: duas telas nunca compartilham `módulo:tela`. Se colidirem, só as envolvidas são refinadas — primeiro pela pasta da tela e depois pelo caminho completo. Se uma rota usa um nome de classe homônimo sem import que identifique a declaração, o CLI registra `ROUTED_COMPONENT_AMBIGUOUS` em vez de associar as telas por engano.
-- Módulo e tela são sempre regravados a partir da estrutura atual (mudou a pasta, o template acompanha). O `data-at-id` é estável entre execuções.
+- Módulo e tela são sempre regravados a partir da estrutura atual (mudou a pasta, o template acompanha). O ID gerado para o mesmo gesto é estável entre execuções.
 - **ID**: `<módulo>-<tela>-<nome>`, `nome` = primeiras palavras do texto visível estático (sem `@if`/`@for`, sem URL) ou do handler. O owner não compõe o ID; trocar `runtime.owner` atualiza todos os atributos de ownership mantendo IDs estáveis.
 - **Tela de um componente**: o motor sobe até a rota por todos os caminhos de Angular — seletor em template, referência na classe, cadeia de serviços (inclusive `ModalService`/use-cases) e effects NgRx (pela action despachada). Componente sem nenhum uso e a casca do app (`app-root`) não entram na planilha; no runtime, emitem com a tela onde o usuário está.
 
@@ -90,11 +90,11 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 |---|---|---|
 | `ambiente` | resolvido pelo preset do aplicativo | idem |
 | `produto` | `runtime.product` | idem |
-| `funcionalidade`, `subfuncionalidade` | dos atributos | idem |
-| `tela` | `<ambiente>:<produto>:<funcionalidade>:<subfuncionalidade>` | idem |
+| `funcionalidade` | do contexto da tela (`classic`) ou do token (`ref`) | idem |
+| `tela` | `<ambiente>:<produto>:<tela>` | idem |
 | `categoria` | igual a `tela` | — |
-| `acao` | `clique` | `visualizacao` |
-| `elemento` | `data-at-elemento` | `tela` |
+| `acao` | `clique` | não enviada |
+| `elemento` | atributo (`classic`) ou token decodificado (`ref`) | não enviado |
 | `rotulo` | texto visível no instante do gesto | — |
 | `opcao_selecionada_1` | opção escolhida (`ionChange`) | — |
 
@@ -109,3 +109,19 @@ O preset informado pelo aplicativo define os IDs nativos e temas Web aceitos, co
 | `relatorio.json` | `entries[]` (uma por interação/tela) e `diagnostics[]`; sem timestamp, determinístico |
 | `evidencia-tagueamento.xlsx` | **Resumo** (indicadores e índice de módulos) e **uma aba por módulo**; componentes que nenhuma rota alcança ficam em **Componentes globais**. Identidade visual configurável; sem dado de usuário |
 | `cache/estado.json` | Fingerprint das entradas e hashes do relatório e da planilha; independe de máquina |
+
+## Contrato `ref`: token autocontido, sem manifesto externo
+
+A biblioteca permite dois modos explícitos de geração e execução (`runtime.mode: 'classic' | 'ref'`). O padrão é `classic`, que mantém os atributos do contrato original. FED/MOB usam `ref`, com **somente `data-at-ref`** nos elementos observáveis.
+
+```html
+<bsds-button data-at-ref="v1.eJ..." (bsdsClick)="excluir()">Excluir {{ nome }}</bsds-button>
+```
+
+O valor acima é ilustrativo; um token real é gerado pelo CLI e usa DEFLATE (formato versionado `v1.` + base64url), não criptografia nem hash irreversível. Ele embute `owner`, funcionalidade, tela, ID, tipo de evento, elemento, rótulo de fallback, `@Output`, seletor e regras de opção. Nenhum ID é descoberto pelo prefixo do token. O runtime detecta o gesto no DOM/Shadow DOM, decodifica o token em cache LRU limitado, captura os dados dinâmicos e valida pelo schema **antes** de chamar `send`/AnalyticsAdapter. O token não é enviado ao Firebase.
+
+**Sem outro manifesto**: `relatorio.json` fica somente na geração/CI, com `entries[]`, `diagnostics[]` e o token na propriedade `ref` de cada entrada em modo ref. O app **não importa o JSON em runtime** nem usa `trackingManifest`, não faz fetch e não precisa de módulo TypeScript gerado. A planilha mantém os mesmos campos de auditoria, sem coluna `ref`.
+
+No modo `classic`, o CLI gera o contrato original `data-at-id`, `data-at-owner`, `data-at-event`, `data-at-elemento`, `data-at-rotulo`, `data-at-outputs` e demais atributos necessários. O runtime lê esses atributos como antes. A configuração de build deve usar o **mesmo modo do CLI e do provider**; tokens de modo diferente não são consumidos. O primeiro `tracking` cria ou reconcilia os eventos; a segunda execução deve escrever zero arquivos. Referências malformadas não são decodificadas nem geram eventos.
+
+Rótulos dinâmicos e valores selecionados não são congelados dentro do token: o runtime consulta o elemento acessível e o `detail` do evento no instante da interação. Listeners do documento são removidos quando o provider é destruído. A importação da biblioteca pode adicionar código de descompressão ao bundle; o custo deve ser verificado no build real. Ambos os modos precisam ter os caminhos causais validados com o adaptador real antes do deploy.

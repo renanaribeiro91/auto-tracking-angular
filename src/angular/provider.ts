@@ -78,6 +78,7 @@ class AutoTrackingLifecycle {
       owner: this.options.owner,
       product: this.options.product,
       schema: this.options.preset.schema,
+      mode: this.options.mode ?? 'classic',
       resolveEnvironment: () => dispatcher.resolveEnvironment(),
       send: (event) => dispatcher.send(event),
       warn: (message) => console.warn(message),

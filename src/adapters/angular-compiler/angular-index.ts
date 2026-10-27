@@ -45,6 +45,7 @@ export class AngularProjectConfigReader {
     let owner = '';
     let root = '';
     let product = '';
+    let mode: 'classic' | 'ref' = 'classic';
     let hasPreset = false;
     let hasBranding = false;
     const branding: { logoPng?: string; watermarkPng?: string; primaryColor?: string } = {};
@@ -77,6 +78,11 @@ export class AngularProjectConfigReader {
         for (const rp of prop.initializer.properties) {
           if (!ts.isPropertyAssignment(rp)) continue;
           const rname = rp.name.getText();
+          if (rname === 'mode') {
+            const value = this.extractStringLiteral(rp.initializer);
+            if (value !== 'classic' && value !== 'ref') throw new Error("runtime.mode precisa ser 'classic' ou 'ref'");
+            mode = value;
+          }
           if (rname === 'owner') owner = this.extractStringLiteral(rp.initializer) ?? owner;
           else if (rname === 'root') root = this.extractStringLiteral(rp.initializer) ?? root;
           else if (rname === 'product') product = this.extractStringLiteral(rp.initializer) ?? product;
@@ -89,7 +95,7 @@ export class AngularProjectConfigReader {
     }
 
     if (!owner || !product) return null;
-    return { projects, output, owner, root, product, hasPreset, hasBranding, branding, presetName };
+    return { projects, output, owner, root, product, mode, hasPreset, hasBranding, branding, presetName };
   }
 
   private extractProjectConfig(obj: ts.ObjectLiteralExpression): ProjectConfig | null {

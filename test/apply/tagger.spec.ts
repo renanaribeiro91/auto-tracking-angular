@@ -147,6 +147,23 @@ describe('tagger: toda interação declarada no template', () => {
     expect(r.entries.map((e) => e.origem)).toEqual(['(voltar) em <lib-header>', '(icone) em <lib-header>']);
   });
 
+  it('compacta saídas repetidas e conserva o ID que já existia no HTML', () => {
+    const card = def({
+      selectors: ['widget-actions'], outputs: new Map([['onAction', 'onAction']]),
+      template: '<button class="acao1" (click)="this.onAction.emit()">A</button>'
+        + '<button class="acao2" (click)="this.onAction.emit()">B</button>'
+        + '<button class="acao3" (click)="this.onAction.emit()">C</button>',
+    });
+    const c: ComponentCatalog = { get: (tag) => tag === 'widget-actions' ? card : catalog.get(tag) };
+    const legacy = '<widget-actions data-at-outputs="meu-id-manual|click|button.acao1|acao|onAction" (onAction)="acao()"></widget-actions>';
+    const first = tagTemplate(legacy, ctx({ catalog: c, usedIds: new Set(['meu-id-manual']) }));
+    expect(first.entries.map((entry) => entry.id)).toEqual(['meu-id-manual']);
+    expect(first.html).toContain('data-at-outputs="meu-id-manual|click|button.acao1|');
+    const second = tagTemplate(first.html, ctx({ catalog: c, usedIds: new Set(['meu-id-manual']) }));
+    expect(second.html).toBe(first.html);
+    expect(second.entries[0]?.id).toBe('meu-id-manual');
+  });
+
   it('saída comprovada por ionChange é mantida; output desconhecido é ignorado sem alerta', () => {
     expect(tagTemplate('<lib-select (onChange)="filtrar($event)"></lib-select>', ctx()).html).toContain('|ionChange|ion-select|');
     const unknown = tagTemplate('<x-desconhecido (confirmar)="ok()"></x-desconhecido>', ctx());
@@ -377,9 +394,21 @@ describe('tagger: toda interação declarada no template', () => {
   it('troca atributo gerenciado que é o primeiro da tag sem corromper o nome da tag', () => {
     const old = '<lib-header data-at-outputs="x|click|#btnVoltar|voltar" data-at-owner="mfe-exemplo"\n  (voltar)="voltar()"></lib-header>';
     const r = tagTemplate(old, ctx({ usedIds: new Set(['x']) }));
-    expect(r.html.startsWith('<lib-header data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar"')).toBe(true);
+    expect(r.html.startsWith('<lib-header ')).toBe(true);
+    expect(r.html).toContain('data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar"');
     expect(r.html.match(/data-at-outputs=/g)).toHaveLength(1);
     expect(tagTemplate(r.html, ctx({ usedIds: new Set(r.entries.map((e) => e.id)) })).html).toBe(r.html);
+  });
+
+  it('não renomeia contexto de componente compartilhado já instrumentado por mudança de pastas', () => {
+    const old = '<button data-at-id="consulta-abrir" data-at-owner="mob" data-at-funcionalidade="consulta" data-at-tela="resumo" (click)="abrir()">Abrir</button>';
+    const modifiedContext = ctx({ funcionalidade: 'detalhes', tela: 'resumo' });
+    const first = tagTemplate(old, modifiedContext);
+    expect(first.html).toContain('data-at-funcionalidade="consulta"');
+    expect(first.entries[0]).toMatchObject({ id: 'consulta-abrir', funcionalidade: 'consulta', tela: 'resumo' });
+    expect(tagTemplate(first.html, modifiedContext).html).toBe(first.html);
+    const brandNew = tagTemplate('<button (click)="abrir()">Abrir</button>', modifiedContext);
+    expect(brandNew.entries[0]?.funcionalidade).toBe('detalhes');
   });
 
   it('segunda execução não altera nada (ids, saídas e atributos estáveis)', () => {
