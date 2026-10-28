@@ -16,5 +16,8 @@ ruvector.db
 _bmad/
 _bmad-output/
 
+# credenciais locais GitHub (nunca versionar)
+.env.git.local
+
 # sistema
 .DS_Store
