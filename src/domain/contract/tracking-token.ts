@@ -91,19 +91,29 @@ export function decodeTrackingToken(token: string): TrackingElement | null {
 
 /** Cache LRU limitado evita custo de inflate/parse em cliques repetidos. */
 export class TrackingTokenCache {
-  private readonly entries = new Map<string, TrackingElement | null>();
-  constructor(private readonly capacity = 4096) {}
+  private readonly entries = new Map<string, { value: TrackingElement | null; bytes: number }>();
+  private occupiedBytes = 0;
+  /** Limita tokens E contratos decodificados; teto aproximado de 2 MiB em strings. */
+  constructor(private readonly capacity = 1024, private readonly maxBytes = 2 * 1024 * 1024) {}
 
   resolve(token: string): TrackingElement | null {
     const previous = this.entries.get(token);
-    if (previous !== undefined || this.entries.has(token)) {
+    if (previous) {
       this.entries.delete(token);
-      this.entries.set(token, previous ?? null);
-      return previous ?? null;
+      this.entries.set(token, previous);
+      return previous.value;
     }
     const decoded = decodeTrackingToken(token);
-    this.entries.set(token, decoded);
-    if (this.entries.size > this.capacity) this.entries.delete(this.entries.keys().next().value!);
+    const bytes = token.length * 2 + (decoded ? JSON.stringify(decoded).length * 2 : 0);
+    if (bytes > this.maxBytes || this.capacity < 1) return decoded;
+    this.entries.set(token, { value: decoded, bytes });
+    this.occupiedBytes += bytes;
+    while (this.entries.size > this.capacity || this.occupiedBytes > this.maxBytes) {
+      const oldest = this.entries.keys().next().value!;
+      const evicted = this.entries.get(oldest)!;
+      this.entries.delete(oldest);
+      this.occupiedBytes -= evicted.bytes;
+    }
     return decoded;
   }
 }

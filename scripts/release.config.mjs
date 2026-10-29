@@ -1,4 +1,4 @@
-/** Política operacional do pacote privado; a versão vigente permanece em package.json. */
+/** Política de artefatos locais, sem publicação; versão vigente em package.json. */
 export const RELEASE_CONFIG = Object.freeze({
   defaultMode: 'minor',
   currentMode: 'current',

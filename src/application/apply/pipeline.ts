@@ -147,13 +147,19 @@ export class TrackingPipeline {
         for (const match of text.matchAll(/data-at-(?:overlay-)?outputs=["']([^"']+)["']/g)) {
           for (const output of decodeOutputBindings(match[1])) usedIds.add(output.id);
         }
-        for (const match of text.matchAll(/data-at-ref=["']([^"']+)["']/g)) {
-          const element = decodeTrackingToken(match[1]!);
+        // Reservar também IDs de tokens declarados em bindings dinâmicos:
+        // esses IDs já publicados não podem ser tomados por outros elementos.
+        const references = [
+          ...[...text.matchAll(/data-at-ref=["']([^"']+)["']/g)].map((match) => match[1]!),
+          ...[...text.matchAll(/\[attr\.data-at-ref\]\s*=\s*(["'])([\s\S]*?)\1/g)]
+            .flatMap((match) => [...match[2]!.matchAll(/['"](v1\.[A-Za-z0-9_-]+)['"]/g)].map((value) => value[1]!)),
+        ];
+        for (const reference of references) {
+          const element = decodeTrackingToken(reference);
           if (element?.screenId) usedIds.add(element.screenId);
           if (element?.click) usedIds.add(element.click.id);
           for (const output of [...(element?.outputs ?? []), ...(element?.overlayOutputs ?? [])]) usedIds.add(output.id);
         }
-
       }
 
       for (const t of targets) {

@@ -243,6 +243,66 @@ export class TemplateTagger {
       const tag = m[1]!.toLowerCase();
       const originalAttrs = this.analysis.parseAttrs(m[2] ?? '');
       const attrs = new Map(originalAttrs);
+      const dynamicRef = originalAttrs.get('[attr.data-at-ref]');
+      // Angular controla integralmente o atributo quando existe binding.
+      // Nunca acrescentar uma segunda origem estática: ela pode ser removida
+      // ou sobrescrita na detecção de mudanças e criar eventos concorrentes.
+      if (ctx.mode === 'ref' && dynamicRef !== undefined) {
+        const staticRef = originalAttrs.get('data-at-ref');
+        if (staticRef !== undefined) {
+          const found = /\s+data-at-ref\s*=\s*(["'])[^"']*\1/.exec(m[0]);
+          if (found) removals.push({ at: m.index! + found.index, length: found[0].length });
+        }
+        // A expressão é código do consumidor: apenas tokens literais podem
+        // ser comprovados estaticamente. Não substituir condições de negócio.
+        const literals = [...dynamicRef.matchAll(/['"](v1\.[A-Za-z0-9_-]+)['"]/g)].map((item) => item[1]!);
+        const contracts = literals.map((token) => ({ token, value: decodeTrackingToken(token) }));
+        if (contracts.length === 0) {
+          // O consumidor controla o valor em runtime, sem token literal que o
+          // analisador possa provar. Não inventar evento nem considerar erro.
+          continue;
+        }
+        if (contracts.some(({ value }) => !value || value.owner !== ctx.owner)) {
+          diagnostics.push({ code: 'TRACKING_DYNAMIC_REFERENCE_UNVERIFIED', arquivo: ctx.relFile,
+            linha: this.lineOf(html, m.index!), mensagem: 'token literal inválido ou de outro owner em binding dinâmico' });
+        } else {
+          const seen = new Map<string, string>();
+          for (const { token, value } of contracts) {
+            if (!value) continue;
+            const line = this.lineOf(html, m.index!) + (ctx.lineOffset ?? 1) - 1;
+            const register = (id: string, kind: 'screen_view' | 'click', elemento: string, rotulo: string): void => {
+              const semantic = JSON.stringify([value.owner, value.funcionalidade, value.tela, kind, elemento, rotulo]);
+              const previous = seen.get(id);
+              if (previous !== undefined) {
+                if (previous !== semantic) diagnostics.push({ code: 'TRACKING_DYNAMIC_REFERENCE_CONFLICT',
+                  arquivo: ctx.relFile, linha: line, mensagem: `mesmo ID '${id}' com contratos dinâmicos incompatíveis` });
+                return;
+              }
+              seen.set(id, semantic);
+              if (claimed.has(id)) {
+                diagnostics.push({ code: 'TRACKING_DUPLICATE_EVENT_ID', arquivo: ctx.relFile, linha: line,
+                  mensagem: `ID '${id}' reutilizado por elementos distintos` });
+                return;
+              }
+              claimed.add(id);
+              ctx.usedIds.add(id);
+              entries.push(this.createEntry({ id, evento: kind,
+                acao: kind === 'screen_view' ? 'visualizacao' : 'clique', elemento, rotulo,
+                rotuloDinamico: kind === 'click', origem: '[attr.data-at-ref]', linha: line, ref: token },
+              ctx, value.funcionalidade, value.tela));
+            };
+            if (value.screenId) {
+              screenPlaced = true;
+              register(value.screenId, 'screen_view', '', '');
+            }
+            if (value.click) register(value.click.id, 'click', value.click.elemento, value.click.rotulo);
+            for (const output of [...(value.outputs ?? []), ...(value.overlayOutputs ?? [])]) {
+              register(output.id, 'click', this.elementoFor(tag, originalAttrs, output.output), output.label);
+            }
+          }
+        }
+        continue;
+      }
       const priorRef = originalAttrs.get('data-at-ref');
       const prior = ctx.mode === 'ref' && priorRef ? decodeTrackingToken(priorRef) : null;
       if (priorRef && !prior) {
@@ -322,7 +382,14 @@ export class TemplateTagger {
         }
         const event = domBinding === '(ngSubmit)' || domBinding === '(submit)' ? 'submit' : domBinding === '(change)' ? 'change' : domBinding === '(ionChange)' || CHANGE_CONTROL_TAGS.has(tag) ? 'ionChange' : 'click';
         const name = this.shortName(slug(label.text) || [this.words(handler), this.literalArg(expr)].filter(Boolean).join('-')) || tag;
-        const id = this.claimId(attrs.get('data-at-id'), `${prefix}-${name}`, ctx, claimed);
+        // Mesmo host e mesma ação comprovada podem migrar do @Output do
+        // componente para o evento DOM sem criar uma nova identidade "-2".
+        const solePriorOutput = prior?.outputs?.length === 1 && !prior.click ? prior.outputs[0] : undefined;
+        // Preservar identidade somente com mesma ação E mesmo gesto físico no
+        // host. Rótulo igual com seletor interno diferente não prova equivalência.
+        const migratedId = solePriorOutput?.event === event && solePriorOutput.selector === ':host' &&
+          solePriorOutput.label === (slug(label.text) || name) ? solePriorOutput.id : undefined;
+        const id = this.claimId(attrs.get('data-at-id') ?? migratedId, `${prefix}-${name}`, ctx, claimed);
         const elemento = this.elementoFor(tag, attrs);
         // clique sempre leva rótulo: texto visível no instante do gesto, senão este nome estável
         const rotulo = slug(label.text) || name;
@@ -392,8 +459,13 @@ export class TemplateTagger {
           }
           const handler = this.analysis.handlerName(expr);
           const name = this.shortName(slug(label.text) || [this.words(handler), this.literalArg(expr)].filter(Boolean).join('-')) || this.words(output);
-          const id = this.claimId(known.get(output), `${prefix}-${name}`, ctx, claimed);
           const rotulo = slug(label.text) || name;
+          const solePriorOutput = previous?.length === 1 && !prior?.click ? previous[0] : undefined;
+          const activeOutputs = [...attrs.keys()].filter((attribute) => /^\(([\w.$]+)\)$/.test(attribute) &&
+            !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
+          const migratedId = !known.has(output) && activeOutputs.length === 1 &&
+            solePriorOutput?.label === rotulo ? solePriorOutput.id : undefined;
+          const id = this.claimId(known.get(output) ?? migratedId, `${prefix}-${name}`, ctx, claimed);
           for (const trigger of uniqueTriggers) outputs.push({ id, rotulo, output, trigger });
           if (portal) {
             const anchored = portalAnchors.get(anchor) ?? [];
@@ -431,8 +503,9 @@ export class TemplateTagger {
           owner: ctx.owner, funcionalidade, tela,
           ...(screenId ? { screenId } : {}),
           ...(clickId ? { click: { id: clickId, event: clickEvent,
-            elemento: attrs.get('data-at-elemento') ?? desired.get('data-at-elemento') ?? 'botao',
-            rotulo: attrs.get('data-at-rotulo') ?? desired.get('data-at-rotulo') ?? '',
+            elemento: desired.get('data-at-elemento') ?? 'botao',
+            rotulo: label.dinamico ? (attrs.get('data-at-rotulo') ?? desired.get('data-at-rotulo') ?? '') :
+              (desired.get('data-at-rotulo') ?? ''),
             ...(desired.get('data-at-option-allowed') ? { opcaoPermitida: desired.get('data-at-option-allowed')! } : {}),
             ...(desired.get('data-at-option-allowed') && attrs.has('[attr.aria-label]') ? { opcaoFonte: 'aria-label-numero' as const } : {})
           } } : {}),

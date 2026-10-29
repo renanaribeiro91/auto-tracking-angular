@@ -102,6 +102,23 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 
 O preset informado pelo aplicativo define os IDs nativos e temas Web aceitos, com busca exata. O schema também pertence ao preset.
 
+### Segurança e desempenho do runtime
+
+O runtime deve ser passivo: nunca bloquear navegação, impedir clique ou transformar falha de analytics em exceção do aplicativo. Isso **não** autoriza esconder erros: falhas de descoberta, schema, ambiente e envio são reportadas por `warn`/console, separadas do fluxo de negócio.
+
+- A instalação de listeners, observadores e timers ocorre fora da `NgZone` quando disponível, evitando trabalho adicional de detecção de mudanças causado exclusivamente pelo tracking.
+- A descoberta de marcadores usa `DomDiscoveryScheduler`: varredura por `TreeWalker` incremental, até 160 elementos e orçamento cooperativo de 3 ms por rodada. O agendamento usa `requestIdleCallback` (com limite para não ficar sem progresso) ou cede um frame em WebViews antigas. Gestos DOM padrão são registrados de imediato; hosts customizados adicionados são descobertos prioritariamente. A fila tem limite e sinaliza sobrecarga por diagnóstico `DOM_DISCOVERY_OVERLOAD`, com recuperação incremental, em vez de acumular trabalho ilimitadamente.
+- A varredura inicial é limitada a `runtime.root` quando o host está disponível; overlays projetados para fora dele ainda são observados no documento.
+- O teardown desconecta observadores, remove listeners, cancela tarefas e impede envio quando o ambiente só se resolve após a destruição da origem.
+- Duas injeções com o mesmo `owner` em um `Document` compartilham uma única sessão ativa; ao destruir a sessão ativa, outra instância previamente registrada pode assumir. Outros documentos são isolados.
+- O cache LRU de tokens limita quantidade de entradas e tamanho aproximado de contratos/strings decodificados (2 MiB por padrão); evita crescimento ilimitado em uma WebView de longa duração.
+- Consultas concorrentes de identidade são agrupadas; o ID do bundle nativo é lido uma vez por sessão, com janela de cinco segundos antes de repetir uma chamada que falhou. Bundle não mapeado continua produzindo diagnóstico explícito, mas não aciona a ponte a cada clique. O tema Web continua sendo relido em eventos posteriores.
+- Mudanças rápidas de rota cancelam `screen_view` atrasados de uma rota anterior. Erros do adaptador, schema e identificação permanecem observáveis e não são convertidos em sucessos artificiais.
+
+**Evidência de regressão:** `npm run check`, especialmente `test/runtime/dom-discovery-scheduler.spec.ts`, `test/runtime/dom-tracker.spec.ts` e `test/runtime/provider-lifecycle.spec.ts`. A verificação em Chrome headless com ~18 mil elementos DOM, dois owners, 20 cliques de negócio e um CustomEvent registrou 21 emissões corretas, zero diagnósticos e 1,4 ms para instalar os dois trackers. A verificação no Safari do simulador iOS com ~10 mil elementos e 15 cliques registrou 15 emissões e zero diagnósticos, com instalação em 2 ms. Essas medições são locais e não constituem limite universal de desempenho.
+
+**Gate que essas evidências não substituem:** instrumentar e observar uma aplicação Angular/Ionic real em WKWebView/Android WebView, com o adaptador real, a inicialização nativa, a carga de telas lazy/overlays e repetição de navegações. A causa original do crash em produção não foi comprovada por esses testes isolados.
+
 ## Saídas
 
 | Arquivo | Conteúdo |

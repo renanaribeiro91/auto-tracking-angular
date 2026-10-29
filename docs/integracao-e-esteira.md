@@ -25,13 +25,19 @@ npm run tracking
 npm run tracking:verify
 ```
 
-A primeira execução marca gestos comprovados e gera `.auto-tracking/relatorio.json`, `.auto-tracking/evidencia-tagueamento.xlsx` e `.auto-tracking/cache/estado.json`. A segunda deve escrever **zero arquivos**; o `verify` deve terminar com código `0`. Adicione ao commit as alterações deliberadas nos templates e nesses três artefatos.
+A primeira execução marca gestos comprovados e gera `.auto-tracking/relatorio.json`, `.auto-tracking/evidencia-tagueamento.xlsx` e `.auto-tracking/cache/estado.json`. A segunda deve escrever **zero arquivos**, inclusive não alterar o conteúdo nem os horários de modificação do HTML, JSON, XLSX e estado de cache; o `verify` deve terminar com código `0`. Adicione ao commit as alterações deliberadas nos templates e nesses três artefatos. Não remova tokens existentes para forçar uma geração: a biblioteca reconcilia o contrato anterior com a prova causal atual e preserva IDs e tokens semanticamente intactos. Não há script de migração.
 
-Mudanças relevantes de configuração, HTML, TypeScript da aplicação, metadados instalados de componentes, IDs ou outputs obrigam o motor a reanalisar as entradas. O cache não substitui a verificação: ele apenas evita reescrita desnecessária. No modo `classic`, IDs manuais válidos são preservados. No modo `ref`, o token é autocontido, sem import de relatório no runtime; antes de trocar o modo, limpe externamente os atributos antigos mantendo handlers e HTML de negócio.
+Mudanças relevantes de configuração, HTML, TypeScript da aplicação, metadados instalados de componentes, IDs ou outputs obrigam o motor a reanalisar as entradas. O cache não substitui a verificação: ele apenas evita reescrita desnecessária. No modo `classic`, IDs manuais válidos são preservados. No modo `ref`, o token é autocontido, sem import de relatório no runtime. Mudar a configuração entre esses modos é uma decisão explícita do consumidor, independente da reconciliação normal; não é pré-requisito remover tokens já existentes para usar o gerador.
 
 ### O que conta como cobertura
 
 Um output por si só não é prova de um gesto. Se não houver produtor público ou um gesto DOM comprovável, o motor não cria marcação, alerta de analytics ou evento fictício. Isso vale também para inputs de digitação e eventos técnicos. Casos em que falta infraestrutura de runtime, como provider não registrado, continuam sendo falhas reais de integração.
+
+## Contratos dos callbacks do consumidor
+
+A biblioteca não conhece o banco de dados, Firebase, serviços de tema ou autenticação do host. `getWebTheme(injector)` **deve apenas ler o valor do tema**: não deve publicar em `Subject`, persistir dados, navegar nem provocar alterações de estado. A biblioteca pode chamá-lo ao preparar eventos Web, para reconhecer mudanças legítimas de tema. Uma função que publica novamente o mesmo tema pode amplificar assinaturas e renderizações de um aplicativo inteiro; a correção desse efeito colateral pertence à implementação do consumidor.
+
+O callback `send(event, injector)` deve retornar uma `Promise` quando a operação for assíncrona e propagar rejeições: o runtime as registra sem impedir a interação de negócio. Se o adaptador inicia tarefas assíncronas e devolve `void`, erros posteriores dessa tarefa **não podem ser capturados pela biblioteca**, porque não existe vínculo com a promessa descartada. O consumidor deve garantir que seu adaptador trate ou exponha esses erros. Não mascarar falhas com `.catch(() => undefined)`.
 
 ## Escolha do modo e entrega ao adaptador
 

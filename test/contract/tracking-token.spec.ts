@@ -47,6 +47,19 @@ describe('token autocontido: codec versionado e sem estado externo', () => {
     expect(decodeTrackingToken(malicious)).toBeNull();
   });
 
+  it('cache limita bytes, sem invalidar a decodificação de tokens válidos', () => {
+    const a = encodeTrackingToken(contract);
+    const b = encodeTrackingToken({ ...contract, tela: 'nova-tela' });
+    const cache = new TrackingTokenCache(10, a.length * 2 + 1);
+    const first = cache.resolve(a);
+    expect(first).toEqual(contract);
+    expect(cache.resolve(b)?.tela).toBe('nova-tela');
+    // O primeiro token foi desalojado pelo orçamento, mas continua válido.
+    expect(cache.resolve(a)).toEqual(first);
+    const noCapacity = new TrackingTokenCache(0, 0);
+    expect(noCapacity.resolve(a)).toEqual(contract);
+  });
+
   it('cache reusa contrato decodificado e limita crescimento de memória', () => {
     const cache = new TrackingTokenCache(2);
     const a = encodeTrackingToken(contract);

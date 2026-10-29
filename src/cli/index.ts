@@ -213,7 +213,9 @@ class AutoTrackingCli {
     const result = pipeline.runPipeline(root, configFile);
     const summary = pipeline.summarize(result);
     const branding = this.resolveBranding(root, config);
-    const signature = workbook.workbookSignature(result.relatorio, branding, implementation);
+    // A evidência Excel depende do contrato e do layout, não do código do
+    // runtime/DOM. Corrigir um listener não deve regravar a planilha idêntica.
+    const signature = workbook.workbookSignature(result.relatorio, branding);
     const reportChanged = this.fileContent(paths.relatorioFile) !== result.relatorio;
     const workbookChanged = (await workbook.readWorkbookSignature(paths.excelFile)) !== signature;
     const status = result.diagnostics.some((d) => BLOCKING_DIAGNOSTIC_CODES.has(d.code)) ? 'incomplete' : 'valid';
@@ -225,7 +227,10 @@ class AutoTrackingCli {
     }
 
     if (command === 'verify') {
-      return this.verificationReport(root, paths, result, summary, status, reportChanged, workbookChanged);
+      // A evidência só está íntegra quando o fingerprint também corresponde
+      // às fontes, dependências e implementação atual, mesmo sem novos tokens.
+      const cacheValid = this.cachedReport('verify', root, paths, fingerprint, false) !== null;
+      return this.verificationReport(root, paths, result, summary, status, reportChanged, workbookChanged, !cacheValid);
     }
     return this.applyReport(root, config, configFile, paths, result, summary, status, branding, signature, reportChanged, workbookChanged, dryRun, pipeline, workbook);
   }
@@ -278,11 +283,13 @@ class AutoTrackingCli {
     status: Report['status'],
     reportChanged: boolean,
     workbookChanged: boolean,
+    cacheInvalid: boolean,
   ): Report {
     const pending = [
       ...result.changes.map((change) => `marcação pendente: ${path.relative(root, change.file)}`),
       ...(reportChanged ? ['relatorio.json desatualizado'] : []),
       ...(workbookChanged ? ['evidencia-tagueamento.xlsx ausente ou desatualizada'] : []),
+      ...(cacheInvalid ? ['cache/estado.json desatualizado ou inválido'] : []),
     ];
     return {
       command: 'verify',

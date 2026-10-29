@@ -6,6 +6,8 @@ export const BLOCKING_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
   'INLINE_TEMPLATE_INTERPOLATED',
   'ROUTED_COMPONENT_AMBIGUOUS',
   'BOOTSTRAP_PROVIDER_MISSING', 'TRACKING_REFERENCE_UNKNOWN', 'OPTION_ACCESSIBLE_SOURCE_MISSING',
+  'TRACKING_DYNAMIC_REFERENCE_UNVERIFIED', 'TRACKING_DYNAMIC_REFERENCE_CONFLICT',
+  'TRACKING_DUPLICATE_EVENT_ID',
 ]);
 
 /** Códigos de saída que o CLI mantém estáveis para scripts e pipelines. */
@@ -19,7 +21,7 @@ export const CLI_EXIT_CODES = {
 export const CLI_HELP_TEXT = `auto-tracking [comando] [opções]
 
   (sem comando)   garante o tagueamento: marca o que falta (telas, botões, componentes),
-                  atualiza relatorio.json e evidencia-tagueamento.xlsx e valida — use na esteira ou no pre-commit
+                  atualiza relatorio.json e evidencia-tagueamento.xlsx e valida — execute pelo CLI ou automatização do consumidor
   verify          só confere, sem escrever; exit 1 se faltar marcação
 
 Opções

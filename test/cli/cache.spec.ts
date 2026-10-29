@@ -51,6 +51,30 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
 
+  it('execução idempotente não toca HTML, relatório, Excel ou cache quando as entradas são iguais', () => {
+    write('src/app.html', '<button (click)="salvar()">Salvar</button>');
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
+    const files = [
+      'src/app.html',
+      '.auto-tracking/relatorio.json',
+      '.auto-tracking/evidencia-tagueamento.xlsx',
+      '.auto-tracking/cache/estado.json',
+    ].map((name) => path.join(root, name));
+    const before = files.map((file) => ({
+      bytes: fs.readFileSync(file),
+      mtimeMs: fs.statSync(file).mtimeMs,
+      ctimeMs: fs.statSync(file).ctimeMs,
+    }));
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0, arquivosEscritos: 0, cache: 'hit' });
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [], cache: 'hit' });
+    files.forEach((file, index) => {
+      const stat = fs.statSync(file);
+      expect(fs.readFileSync(file).equals(before[index]!.bytes)).toBe(true);
+      expect(stat.mtimeMs).toBe(before[index]!.mtimeMs);
+      expect(stat.ctimeMs).toBe(before[index]!.ctimeMs);
+    });
+  });
+
   it('modo classic preserva atributos originais e relatório sem ref', () => {
     const config = path.join(root, 'auto-tracking.config.ts');
     fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace("mode: 'ref'", "mode: 'classic'"));
@@ -146,6 +170,23 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli().status).toBe('valid');
     expect(fs.readFileSync(file, 'utf8')).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
+  });
+
+  it('cache com fingerprint divergente deve falhar no verify, ser recomposto sem mudar tokens e voltar a validar', () => {
+    write('src/app.html', '<button (click)="salvar()">Salvar</button>');
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
+    const file = path.join(root, 'src/app.html');
+    const html = fs.readFileSync(file, 'utf8');
+    const stateFile = path.join(root, '.auto-tracking/cache/estado.json');
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.fingerprint = 'fingerprint-forcado-invalido';
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
+    const invalid = cli('verify');
+    expect(invalid).toMatchObject({ status: 'incomplete', exit: 1 });
+    expect(invalid.pendencias).toEqual(expect.arrayContaining([expect.stringContaining('cache')]));
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0, arquivosEscritos: 1 });
+    expect(fs.readFileSync(file, 'utf8')).toBe(html);
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [] });
   });
 
   it('reanalisa um bundle instalado alterado sem mudança de lockfile', () => {

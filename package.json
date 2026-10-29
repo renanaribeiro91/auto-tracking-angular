@@ -1,6 +1,6 @@
 {
   "name": "auto-tracking-angular",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": false,
   "description": "Biblioteca Angular/Ionic para auto-tracking com análise causal, geração de tags e relatórios Excel/JSON",
   "type": "module",
@@ -21,7 +21,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli/index.js', 0o755)\"",
@@ -47,6 +48,9 @@
     "typescript": ">=4.9.0"
   },
   "peerDependenciesMeta": {
+    "@capacitor/core": {
+      "optional": true
+    },
     "@capacitor/app": {
       "optional": true
     },

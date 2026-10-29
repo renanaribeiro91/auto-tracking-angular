@@ -1,4 +1,5 @@
 import { tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
+import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 import type { ComponentCatalog, ComponentDef } from '../../src/application/apply/ports/component-catalog.js';
 
 const def = (over: Partial<ComponentDef> & Pick<ComponentDef, 'selectors'>): ComponentDef => ({
@@ -409,6 +410,62 @@ describe('tagger: toda interação declarada no template', () => {
     expect(tagTemplate(first.html, modifiedContext).html).toBe(first.html);
     const brandNew = tagTemplate('<button (click)="abrir()">Abrir</button>', modifiedContext);
     expect(brandNew.entries[0]?.funcionalidade).toBe('detalhes');
+  });
+
+  it('preserva a identidade no mesmo host quando o gesto migra de @Output para click comprovado', () => {
+    const component = def({
+      selectors: ['demo-button'],
+      outputs: new Map([['onClick', 'onClick']]),
+      template: '',
+      hostListeners: [{ event: 'click', expr: 'this.onClick.emit()' }],
+    });
+    const selectedCatalog: ComponentCatalog = { get: (tag) => tag === 'demo-button' ? component : catalog.get(tag) };
+    const before = tagTemplate('<demo-button (onClick)="salvar()">Salvar</demo-button>', ctx({ mode: 'ref', catalog: selectedCatalog }));
+    const previousRef = /data-at-ref="([^"]+)"/.exec(before.html)![1]!;
+    const previousId = decodeTrackingToken(previousRef)?.outputs?.[0]?.id;
+    expect(previousId).toBeTruthy();
+    const modified = before.html.replace('(onClick)="salvar()"', '(click)="salvar()"');
+    const after = tagTemplate(modified, ctx({ mode: 'ref', catalog: selectedCatalog, usedIds: new Set([previousId!]) }));
+    const nextRef = /data-at-ref="([^"]+)"/.exec(after.html)![1]!;
+    expect(decodeTrackingToken(nextRef)?.click?.id).toBe(previousId);
+    expect(decodeTrackingToken(nextRef)?.outputs).toBeUndefined();
+    expect(tagTemplate(after.html, ctx({ mode: 'ref', catalog: selectedCatalog, usedIds: new Set([previousId!]) })).html).toBe(after.html);
+  });
+
+  it('nunca adiciona data-at-ref estático concorrendo com um binding Angular dinâmico', () => {
+    const before = tagTemplate('<button (click)="salvar()">Salvar</button>', ctx({ mode: 'ref' }));
+    const token = /data-at-ref="([^"]+)"/.exec(before.html)![1]!;
+    const manual = '<button [attr.data-at-ref]="x ? ' + "'" + token + "' : null" + ' (click)="salvar()">Salvar</button>';
+    const generated = tagTemplate(manual, ctx({ mode: 'ref' }));
+    expect(generated.html).toBe(manual);
+    expect(generated.html).not.toMatch(/(?:^|\s)data-at-ref="/);
+  });
+
+  it('remove referência estática concorrente e preserva binding manual válido sem perder o evento', () => {
+    const first = tagTemplate('<button (click)="salvar()">Salvar</button>', ctx({ mode: 'ref' }));
+    const ref = /data-at-ref="([^"]+)"/.exec(first.html)![1]!;
+    const both = '<button data-at-ref="' + ref + '" [attr.data-at-ref]="\'' + ref + '\'" (click)="salvar()">Salvar</button>';
+    const result = tagTemplate(both, ctx({ mode: 'ref' }));
+    expect(result.html).not.toMatch(/\\sdata-at-ref="/);
+    expect(result.html).toContain('[attr.data-at-ref]');
+    expect(result.entries.filter((item) => item.evento === 'click')).toHaveLength(1);
+    expect(result.diagnostics).toHaveLength(0);
+    const again = tagTemplate(result.html, ctx({ mode: 'ref' }));
+    expect(again.html).toBe(result.html);
+    expect(again.entries).toEqual(result.entries);
+  });
+
+  it('alteração visual não muda o token; alteração do rótulo atualiza propriedade mantendo identidade', () => {
+    const first = tagTemplate('<button (click)="salvar()">Salvar</button>', ctx({ mode: 'ref' }));
+    const oldRef = /data-at-ref="([^"]+)"/.exec(first.html)![1]!;
+    const visual = tagTemplate(first.html.replace('(click)=', 'class="primary" (click)='), ctx({ mode: 'ref' }));
+    const visualRef = /data-at-ref="([^"]+)"/.exec(visual.html)![1]!;
+    expect(visualRef).toBe(oldRef);
+    const newLabel = tagTemplate(visual.html.replace('>Salvar</button>', '>Guardar</button>'), ctx({ mode: 'ref' }));
+    const changedRef = /data-at-ref="([^"]+)"/.exec(newLabel.html)![1]!;
+    expect(changedRef).not.toBe(oldRef);
+    expect(decodeTrackingToken(changedRef)?.click?.id).toBe(decodeTrackingToken(oldRef)?.click?.id);
+    expect(decodeTrackingToken(changedRef)?.click?.rotulo).toBe('guardar');
   });
 
   it('segunda execução não altera nada (ids, saídas e atributos estáveis)', () => {

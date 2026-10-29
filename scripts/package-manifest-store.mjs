@@ -14,7 +14,11 @@ export class PackageManifestStore {
     const packageLock = JSON.parse(lockBytes.toString('utf8'));
 
     if (typeof packageJson.name !== 'string' || packageJson.name.length === 0) throw new Error('package.json precisa declarar name.');
-    if (packageJson.private !== true) throw new Error('O pacote precisa permanecer privado; release gera somente o arquivo .tgz.');
+    // Este comando só cria um .tgz local, inclusive para pacotes públicos.
+    // Publicação remota pertence exclusivamente ao fluxo publish:npm.
+    if (typeof packageJson.private !== 'boolean') {
+      throw new Error('package.json precisa declarar explicitamente o campo private.');
+    }
     if (!packageLock.packages?.['']) throw new Error('package-lock.json não contém os metadados da raiz do pacote.');
     if (packageJson.version !== packageLock.version || packageJson.version !== packageLock.packages[''].version) {
       throw new Error('package.json e package-lock.json estão com versões divergentes.');

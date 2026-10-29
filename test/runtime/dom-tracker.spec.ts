@@ -320,6 +320,111 @@ describe('runtime: emissão no formato do Builder do time', () => {
     expect(mob.map((x) => x.params['rotulo'])).toEqual(['voltar']);
   });
 
+  it('se a marcação tiver seletor inválido, o gesto do app continua funcionando sem exceção do tracking', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const warnings: string[] = [];
+    stops = [installDomTracker(document, deps('mob', mob, 'app-x', warnings))];
+    const host = document.createElement('x-faulty');
+    host.setAttribute('data-at-owner', 'mob');
+    host.setAttribute('data-at-outputs', 'id|click|[|salvar|onClick');
+    const button = document.createElement('button');
+    host.appendChild(button);
+    document.body.appendChild(host);
+    let businessClicks = 0;
+    button.addEventListener('click', () => { businessClicks++; });
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    await flush();
+    expect(businessClicks).toBe(1);
+    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining('ignorado com segurança')]));
+  });
+
+  it('um documento de iframe não depende do Element global da janela principal', async () => {
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const frameDocument = iframe.contentDocument!;
+    frameDocument.body.innerHTML =
+      '<button id="iframeAction" data-at-id="inside" data-at-owner="mob" data-at-funcionalidade="demo" data-at-tela="iframe" data-at-elemento="botao" data-at-rotulo="avancar">Avançar</button>';
+    const sent: TrackingEvent[] = [];
+    const stop = installDomTracker(frameDocument, deps('mob', sent));
+    try {
+      const inside = frameDocument.getElementById('iframeAction')!;
+      inside.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      await flush();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.params['tela']).toBe('app-x:saude:iframe');
+    } finally {
+      stop();
+      iframe.remove();
+    }
+  });
+
+  it('montagem pesada de tela não impede cliques e mantém owner correto durante a descoberta incremental', async () => {
+    const app = document.querySelector('app-tipo')!;
+    const big = document.createElement('section');
+    big.innerHTML = '<div><span>sem tracking</span></div>'.repeat(3000);
+    app.appendChild(big);
+    let businessClicks = 0;
+    document.getElementById('mobBtn')!.addEventListener('click', () => { businessClicks++; });
+    for (let i = 0; i < 20; i++) {
+      click('#mobBtn');
+      click('#fedBtn');
+    }
+    await flush();
+    expect(businessClicks).toBe(20);
+    expect(mob).toHaveLength(20);
+    expect(fed).toHaveLength(20);
+    expect(mob.every((event) => event.params['rotulo'] === 'sair')).toBe(true);
+    expect(fed.every((event) => event.params['rotulo'] === 'anexar-recibo')).toBe(true);
+    // Teardown deve parar o processamento pendente sem acessar DOM destruído.
+    stops.forEach((stop) => stop());
+    stops = [];
+    big.remove();
+    await flush();
+  });
+
+  it('destruição durante resolução assíncrona impede envio para provider/MFE desmontado', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const sent: TrackingEvent[] = [];
+    let unblock!: (environment: string) => void;
+    const environment = new Promise<string>((resolve) => { unblock = resolve; });
+    const stop = installDomTracker(document, {
+      ...deps('mob', sent),
+      resolveEnvironment: () => environment,
+    });
+    click('#mobBtn');
+    stop();
+    unblock('app-x');
+    await flush();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('owner diferente não altera a tela global nem emite screen_view', async () => {
+    document.documentElement.setAttribute('data-at-current-screen', 'original|pagina');
+    expect(emitScreenView(document, 'app-tipo', deps('mob', mob))).toBe(true);
+    await flush();
+    expect(mob).toHaveLength(0);
+    expect(document.documentElement.getAttribute('data-at-current-screen')).toBe('original|pagina');
+  });
+
+  it('falha assíncrona do adaptador é diagnosticada sem interromper o clique de negócio', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const messages: string[] = [];
+    let businessClicks = 0;
+    const button = document.getElementById('mobBtn')!;
+    button.addEventListener('click', () => { businessClicks++; });
+    stops = [installDomTracker(document, {
+      ...deps('mob', []),
+      send: async () => { throw new Error('analytics-adapter-offline'); },
+      warn: (message) => { messages.push(message); },
+    })];
+    click('#mobBtn');
+    await flush();
+    expect(businessClicks).toBe(1);
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.stringContaining('falha no envio: Error: analytics-adapter-offline'),
+    ]));
+  });
+
   it('ambiente não resolvido: não envia e avisa', async () => {
     stops.forEach((s) => s());
     const sent: TrackingEvent[] = []; const warns: string[] = [];
