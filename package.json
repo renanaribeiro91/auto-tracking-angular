@@ -36,7 +36,14 @@
     "test:ci": "npm test -- --ci --runInBand",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run check",
-    "publish:npm": "node scripts/publish-npm.mjs"
+    "publish:npm": "node scripts/publish-npm.mjs",
+    "npm:login": "npm login --auth-type=web --registry=https://registry.npmjs.org/",
+    "npm:whoami": "npm whoami --registry=https://registry.npmjs.org/",
+    "npm:stage:list": "npm stage list auto-tracking-angular",
+    "npm:stage:view": "npm stage view",
+    "npm:stage:approve": "npm stage approve",
+    "npm:stage:reject": "npm stage reject",
+    "npm:stage:download": "npm stage download"
   },
   "peerDependencies": {
     "@angular/common": ">=16.0.0",

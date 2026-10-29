@@ -159,16 +159,20 @@ npm test -- --runInBand     # suíte completa em execução sequencial
 
 O script `lint` existente também executa apenas `tsc --noEmit`; não representa uma verificação ESLint. Um linter independente pode ser introduzido somente com configuração e dependências próprias.
 
-A fonte da versão publicada é `package.json`. Para publicar com segurança, faça commit da versão aprovada, autentique-se com `npm login --auth-type=web` e execute:
+A fonte da versão publicada é `package.json`. Todo o fluxo npm pode ser executado pelos scripts do projeto (os IDs abaixo devem ser obtidos da listagem real):
 
 ```bash
-npm run publish:npm                 # prepara a versão atual para aprovação npm
-npm run publish:npm -- patch        # incrementa patch e prepara a próxima versão
-npm stage list auto-tracking-angular # consulta o ID da versão em revisão
-npm stage approve ID_DO_STAGE      # substitua pelo ID real; aprova com 2FA
+npm run npm:login                      # autoriza o npm CLI pelo navegador; credencial fica fora do repositório
+npm run npm:whoami                     # confirma a conta ativa
+npm run publish:npm -- current         # envia a versão já commitada para staging, com os gates de publicação
+npm run npm:stage:list                 # lista as versões em estágio do pacote
+npm run npm:stage:view -- ID_DO_STAGE  # detalhes de um estágio específico
+npm run npm:stage:download -- ID_DO_STAGE # baixa o pacote para inspeção
+npm run npm:stage:approve -- ID_DO_STAGE  # aprova e publica após confirmação/2FA exigida pelo npm
+npm run npm:stage:reject -- ID_DO_STAGE   # rejeita o estágio selecionado
 ```
 
-O script **não envia automaticamente ao público sem 2FA**: ele executa `npm stage publish`, que aplica `prepublishOnly` (`npm run check`), e recusa árvore Git suja, versão já publicada ou em estágio. Para `patch/minor/major`, a atualização do `package.json` e do lockfile fica local; revise e faça commit também da nova versão. `npm run release` continua gerando apenas artefato local, sem publicar. O preset externo possui `id` e `version` próprios, independentes da versão npm.
+`npm run publish:npm -- patch` prepara um incremento patch; `minor` e `major` também são aceitos, mas exigem a revisão e commit da versão resultante antes da publicação. O script recusa Git sujo, versão já publicada e estágio duplicado. **Aprovação e rejeição são operações distintas e explícitas**: nenhum hook, build ou script de login aprova automaticamente um estágio. A credencial pertence ao usuário em `~/.npmrc`; jamais a copie para `package.json`, scripts, Git ou logs. `npm run release` somente cria um `.tgz` local, sem publicar. O preset externo possui `id` e `version` próprios, independentes da versão npm.
 
 ## Leitura complementar
 

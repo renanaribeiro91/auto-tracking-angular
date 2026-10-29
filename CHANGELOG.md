@@ -17,6 +17,10 @@
 - Verificação rigorosa de cache, assinatura e artefatos; execução sem mudanças não altera HTML, JSON, XLSX ou estado do cache.
 - Relatório Excel só é regravado quando sua própria entrada/assinatura muda; testes adicionais de idempotência e marcação.
 
+### Operação da publicação npm
+
+- Scripts no `package.json` para login, consulta da conta, listagem, inspeção, download, aprovação e rejeição de estágios npm, sem armazenar credenciais no repositório.
+
 ### Validação local
 
 - TypeScript, build, execução de testes, `npm pack` e instalação de pacote `.tgz` em projeto temporário.
