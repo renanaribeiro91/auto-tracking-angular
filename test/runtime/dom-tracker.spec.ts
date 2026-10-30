@@ -2,7 +2,7 @@
 import { installDomTracker, emitScreenView, type DomTrackerDeps } from '../../src/adapters/runtime/dom-tracker.js';
 import { examplePreset } from '../fixtures/preset/index.js';
 import type { TrackingEvent } from '../../src/config.js';
-import { encodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
+import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -56,7 +56,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     click('#fedBtn b');
     await flush();
     expect(mob).toHaveLength(0);
-    expect(fed).toEqual([clickPayload('tipo-documento', 'anexar-recibo')]);
+    expect(fed).toEqual([clickPayload('tipo-documento', 'anexar')]);
   });
 
   it('botão só com ícone usa o rótulo estável do CLI', async () => {
@@ -99,7 +99,9 @@ describe('runtime: emissão no formato do Builder do time', () => {
     click('#titulo'); // sem output de título
     click('#btnVoltar');
     await flush();
-    expect(fed.map((event) => event.params['rotulo'])).toEqual(['excluir-joao', 'excluir-maria', 'voltar']);
+    // Texto variável (nome de pessoa) nunca vai ao analytics: rótulo é o do contrato.
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['anexar', 'anexar', 'voltar']);
+    expect(JSON.stringify(fed)).not.toMatch(/joao|maria/i);
     expect(fed.map((event) => event.name)).toEqual(['click', 'click', 'click']);
     expect(button.outerHTML).not.toContain('data-at-id');
   });
@@ -117,8 +119,24 @@ describe('runtime: emissão no formato do Builder do time', () => {
     click('#fedBtn');
     await flush();
     expect(fed.map((event) => event.params['opcao_selecionada_1'])).toEqual(['4', '2']);
-    expect(fed.map((event) => event.params['rotulo'])).toEqual(['avaliar-com-4-estrelas', 'avaliar-com-2-estrelas']);
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['avaliar', 'avaliar']);
     expect(star.outerHTML).not.toContain('data-at-option');
+  });
+
+  it('item de lista estática envia o valor visível somente quando provado pelo CLI', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const menu = document.querySelector('app-tipo')!;
+    const token = encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'menu', tela: 'inicio',
+      click: { id: 'menu-navegar-para', event: 'click', elemento: 'botao', rotulo: 'navegar-para' }, rotulos: ['welcome', 'welcome-home', 'salas-vip'] });
+    menu.insertAdjacentHTML('beforeend', `<x-item id="vip" data-at-ref="${token}"><b>Salas VIP</b><p>Acesso a salas</p></x-item>`
+      + `<x-item id="home" data-at-ref="${token}"><b>Welcome Home</b></x-item>`
+      + `<x-item id="pessoa" data-at-ref="${token}"><b>Maria da Silva</b></x-item>`
+      + `<x-item id="aria" title="Welcome" data-at-ref="${token}"><b>Welcome Home</b></x-item>`);
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    for (const id of ['vip', 'home', 'pessoa', 'aria']) click(`#${id} b`);
+    await flush();
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['salas-vip', 'welcome-home', 'navegar-para', 'welcome']);
+    expect(JSON.stringify(fed)).not.toMatch(/maria/i);
   });
 
   it('modo ref: opção ambígua não é inventada', async () => {
@@ -168,7 +186,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     click('#texto');
     click('#okBtn');
     await flush();
-    expect(fed.map((e) => e.params['rotulo'])).toEqual(['confirmar']);
+    expect(fed.map((e) => e.params['rotulo'])).toEqual(['ok']);
   });
 
   it('dois cliques genuínos geram duas emissões', async () => {
@@ -216,15 +234,25 @@ describe('runtime: emissão no formato do Builder do time', () => {
     sel.click();
     sel.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { value: 'r1' } }));
     await flush();
-    expect(mob).toEqual([clickPayload('tipo-documento', 'tipo-de-documento', { opcao_selecionada_1: 'recibo-medico' })]);
+    expect(mob).toEqual([clickPayload('tipo-documento', 'sel', { opcao_selecionada_1: 'recibo-medico' })]);
   });
 
-  it('lê no clique o rótulo atualizado pelo app', async () => {
+  it('envia o rótulo do contrato (o mesmo da planilha) mesmo quando o app altera o texto', async () => {
     const button = document.getElementById('fedBtn')!;
     button.textContent = 'Resultado carregado';
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
     await flush();
-    expect(fed[0]?.params['rotulo']).toBe('resultado-carregado');
+    expect(fed[0]?.params['rotulo']).toBe('anexar');
+  });
+
+  it('marcador legado sem rótulo usa o texto visível e nunca envia rótulo vazio', async () => {
+    const button = document.getElementById('fedBtn')!;
+    button.removeAttribute('data-at-rotulo');
+    click('#fedBtn');
+    button.textContent = '';
+    click('#fedBtn');
+    await flush();
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['anexar-recibo', 'anexar']);
   });
 
   it('emite a opção comprovada separada do rótulo em um clique', async () => {
@@ -233,7 +261,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     button.setAttribute('data-at-option-allowed', '1|2|3|4|5');
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
     await flush();
-    expect(fed[0]?.params['rotulo']).toBe('anexar-recibo');
+    expect(fed[0]?.params['rotulo']).toBe('anexar');
     expect(fed[0]?.params['opcao_selecionada_1']).toBe('4');
   });
 
@@ -374,7 +402,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     expect(mob).toHaveLength(20);
     expect(fed).toHaveLength(20);
     expect(mob.every((event) => event.params['rotulo'] === 'sair')).toBe(true);
-    expect(fed.every((event) => event.params['rotulo'] === 'anexar-recibo')).toBe(true);
+    expect(fed.every((event) => event.params['rotulo'] === 'anexar')).toBe(true);
     // Teardown deve parar o processamento pendente sem acessar DOM destruído.
     stops.forEach((stop) => stop());
     stops = [];

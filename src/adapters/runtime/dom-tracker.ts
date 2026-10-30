@@ -1,6 +1,6 @@
 // T09–T14 — emissão runtime: gesto DOM → elemento marcado → owner → tela atual → schema → send
 import { validateEvent, type TrackingSchema } from '../../domain/contract/schema.js';
-import { slug } from '../../domain/contract/slug.js';
+import { labelSlug, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
 import type { TrackingElement } from '../../domain/contract/tracking-element.js';
 import { TrackingTokenCache } from '../../domain/contract/tracking-token.js';
@@ -258,10 +258,14 @@ export class DomEventTracker {
       return;
     }
 
+    // O rótulo do contrato é o mesmo da planilha; texto do DOM pode trazer dados
+    // pessoais. O DOM só é lido para item de lista com valores provados pelo CLI
+    // ou para marcador legado sem rótulo.
     const submitter = event.type === 'submit' ? (event as SubmitEvent).submitter : null;
     // Nunca usar todo o conteúdo do formulário como rótulo da submissão.
     const labelSource = event.type === 'submit' ? submitter : hit.labelSource;
-    const label = (labelSource ? slug(DomEventTracker.visibleLabel(labelSource)) : '') || hit.fallbackLabel;
+    const proven = DomEventTracker.provenLabel(hit);
+    const label = proven || slug(hit.fallbackLabel) || (labelSource ? slug(DomEventTracker.visibleLabel(labelSource)) : '') || slug(hit.id);
     const candidate = hit.host.getAttribute('data-at-option');
     const allowed = hit.descriptor?.click?.opcaoPermitida ?? hit.host.getAttribute('data-at-option-allowed');
     // shortcut: marcadores legados não têm lista de valores; regerar tracking aplica a validação.
@@ -278,10 +282,35 @@ export class DomEventTracker {
     const build = (environment: string, product: string): Params => {
       const base = DomEventTracker.baseParams(screen, environment, product);
       const params: Params = { ...base, categoria: base['tela']!, elemento: element, rotulo: label, acao: 'clique' };
-      if (option) params['opcao_selecionada_1'] = slug(option);
+      const selected = option ? slug(option) : '';
+      if (selected) params['opcao_selecionada_1'] = selected;
       return params;
     };
     void this.dispatch('click', build, hit.id).catch((error) => this.warnSafely(`[auto-tracking] falha no envio: ${String(error)}`));
+  }
+
+  /** Item de lista estática: o rótulo visível só é enviado se for um dos valores provados pelo CLI. */
+  private static provenLabel(hit: Hit): string {
+    const allowed = hit.descriptor?.rotulos ?? hit.host.getAttribute('data-at-rotulos')?.split('|').filter(Boolean);
+    if (!allowed?.length) return '';
+    for (const element of [hit.labelSource, hit.host]) {
+      const exact = [element.getAttribute('aria-label'), element.getAttribute('title'), element.getAttribute('label')]
+        .map((value) => labelSlug(value)).find((value) => allowed.includes(value));
+      if (exact) return exact;
+    }
+    // Texto renderizado pode trazer descrição junto do título. Só um valor
+    // inequívoco é enviado; "welcome" contido em "welcome-home" não conta.
+    // textContent cola nós vizinhos ("Salas VIP" + "Acesso"): normalizar cada texto.
+    const parts: string[] = [];
+    const walker = hit.host.ownerDocument.createTreeWalker(hit.host, 4 /* SHOW_TEXT */);
+    for (let node = walker.nextNode(); node && parts.length < 200; node = walker.nextNode()) {
+      const part = labelSlug(node.nodeValue);
+      if (part) parts.push(part);
+    }
+    const text = `-${parts.join('-')}-`;
+    const found = allowed.filter((value) => text.includes(`-${value}-`));
+    const distinct = found.filter((value) => !found.some((other) => other !== value && other.includes(value)));
+    return distinct.length === 1 ? distinct[0]! : '';
   }
 
   private static accessibleNumericOption(element: Element, allowed: string | null): string | null {

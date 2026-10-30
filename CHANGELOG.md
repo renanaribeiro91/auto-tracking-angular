@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.0.0 — 2026-10-30
+
+### Eventos coerentes com a planilha e sem `(not set)`
+
+- O `rotulo` enviado é o mesmo da planilha; texto variável da tela (nomes, valores) não é enviado. Itens de `*ngFor`/`@for` sobre lista literal da classe enviam o valor provado do item clicado.
+- Rótulos legíveis: ids de teste (`btn-…`, `icon-…`) e palavras de código (`on`, `handle`, `click`, `clique`) não viram rótulo; `title`/`label` ligados a literal são considerados; código de atributos (`n > 0`) não vaza para o texto; URLs em argumentos são ignoradas.
+- Schema rejeita parâmetro obrigatório vazio; opção selecionada vazia não é enviada.
+- Runtime carrega só a descompressão do pako: bundle do app de 69 KB para 43 KB minificado (23 KB → 15,5 KB gzip).
+
+### Hooks git
+
+- `auto-tracking hooks install` instala hooks git nativos (respeita `core.hooksPath`/Husky, idempotente, LF garantido via `.gitattributes`); `hooks status` mostra o estado e o propósito de cada hook.
+- `hook pre-commit` atualiza o tagueamento e inclui no próprio commit o que mudou; `hook pre-push` só verifica. Toda a lógica fica na lib.
+- Pasta de saída apagada é regenerada idêntica a partir dos templates.
+
+### Compatibilidade
+
+- Angular 19 ou posterior: o provider usa `provideEnvironmentInitializer` (sem API depreciada).
+- Runtime não importa mais `@capacitor/*`: a identidade nativa usa a ponte `window.Capacitor`. Nenhum módulo do app é carregado ou avaliado durante um gesto (em microfrontends cada bundle teria a própria cópia do Capacitor). `@capacitor/*` e `@ionic/angular` deixam de ser peerDependencies.
+- Regerar o tagueamento (`npm run tracking`) após atualizar; versões do motor e da planilha mudaram e o cache é invalidado.
+
 ## 1.0.7 — 2026-10-29
 
 ### Estabilidade e desempenho do runtime Angular/Ionic

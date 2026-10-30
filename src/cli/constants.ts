@@ -23,6 +23,10 @@ export const CLI_HELP_TEXT = `auto-tracking [comando] [opções]
   (sem comando)   garante o tagueamento: marca o que falta (telas, botões, componentes),
                   atualiza relatorio.json e evidencia-tagueamento.xlsx e valida — execute pelo CLI ou automatização do consumidor
   verify          só confere, sem escrever; exit 1 se faltar marcação
+  hooks install   instala hooks git nativos (respeita core.hooksPath/Husky; idempotente)
+  hooks status    mostra onde os hooks estão, se estão atualizados e o que cada um faz
+  hook pre-commit atualiza o tagueamento e inclui no commit só os arquivos que a lib escreveu
+  hook pre-push   só verifica; bloqueia o push se houver tagueamento pendente ou não commitado
 
 Opções
   --root <dir>        raiz do projeto (padrão: diretório atual)

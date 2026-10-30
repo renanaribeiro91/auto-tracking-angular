@@ -1,11 +1,20 @@
 // T05 + T06 — resolver de identidade nativa e tema Web
-// Carregamento opcional do plugin Capacitor; erro explícito se configurado mas ausente
+// Usa só a ponte global que o runtime nativo do Capacitor instala no WebView.
+// Importar @capacitor/* carregaria/avaliaria cópias do pacote no meio do gesto
+// (em microfrontends cada bundle tem a sua) e acoplaria a lib à versão do app.
 
 import type { TrackingPreset } from '../../config.js';
 
 export interface NativeIdentityResult {
   readonly bundleId: string;
   readonly environment: string;
+}
+
+/** Subconjunto estável (Capacitor 3+) de `window.Capacitor` usado pela lib. */
+interface CapacitorBridge {
+  isNativePlatform?(): boolean;
+  nativePromise?(plugin: string, method: string, options?: object): Promise<unknown>;
+  Plugins?: Record<string, { getInfo?(): Promise<unknown> } | undefined>;
 }
 
 export type IdentityResolution =
@@ -15,7 +24,6 @@ export type IdentityResolution =
 
 /** Resolve a identidade do ambiente a partir do Capacitor ou do tema Web. */
 export class AppIdentityResolver {
-  private platformProbe: Promise<boolean> | null = null;
   private nativeBundleId: Promise<string> | null = null;
   private nativeFailure: { message: string; retryAfter: number } | null = null;
 
@@ -39,20 +47,16 @@ export class AppIdentityResolver {
   }
 
   private async tryNativeIdentity(preset: TrackingPreset): Promise<IdentityResolution | null> {
-    let nativePlatformConfirmed = false;
+    if (!this.isNativePlatform()) return null;
     try {
-      nativePlatformConfirmed = await this.isNativePlatform();
-      if (!nativePlatformConfirmed) return null;
       const bundleId = await this.getNativeBundleId();
       const environment = preset.nativeAppIdToEnvironment[bundleId];
       if (!environment) return { kind: 'unknown', reason: `bundle ID '${bundleId}' não mapeado no preset` };
       return { kind: 'native', result: { bundleId, environment } };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      // Falha de módulo só indica Web sem Capacitor antes de a plataforma
-      // nativa ser confirmada. Se já é nativo, não substituir identidade
-      // quebrada pelo tema Web: isso mascararia uma configuração inválida.
-      if (!nativePlatformConfirmed && this.isUnavailableOnWeb(message)) return null;
+      // Plataforma nativa confirmada: não substituir identidade quebrada pelo
+      // tema Web, isso mascararia uma configuração inválida.
       return { kind: 'unknown', reason: `erro ao obter identidade nativa: ${message}` };
     }
   }
@@ -66,9 +70,12 @@ export class AppIdentityResolver {
     }
     if (!this.nativeBundleId) {
       this.nativeFailure = null;
-      this.nativeBundleId = import('@capacitor/app')
-        .then(({ App }) => App.getInfo())
-        .then((info) => info.id)
+      this.nativeBundleId = this.nativeAppInfo()
+        .then((info) => {
+          const id = (info as { id?: unknown } | null)?.id;
+          if (typeof id !== 'string' || !id) throw new Error('App.getInfo() sem id de bundle');
+          return id;
+        })
         .catch((error: unknown) => {
           this.nativeBundleId = null;
           this.nativeFailure = {
@@ -81,32 +88,27 @@ export class AppIdentityResolver {
     return this.nativeBundleId;
   }
 
-  private isNativePlatform(): Promise<boolean> {
-    // Em Web, centenas de gestos não precisam repetir import/checagem da
-    // ponte Capacitor. Falha de import não fica guardada como sucesso.
-    if (!this.platformProbe) {
-      this.platformProbe = import('@capacitor/core')
-        .then(({ Capacitor }) => Capacitor.isNativePlatform())
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          if (this.isUnavailableOnWeb(message)) return false;
-          this.platformProbe = null;
-          throw error;
-        });
-    }
-    return this.platformProbe;
+  private bridge(): CapacitorBridge | undefined {
+    return (globalThis as { Capacitor?: CapacitorBridge }).Capacitor;
   }
 
-  private isUnavailableOnWeb(message: string): boolean {
-    // Browser puro: o import opcional do Capacitor pode falhar com mensagens
-    // distintas em Chrome, Safari/WebKit, Node e bundlers. Nesse caso, usar
-    // o tema Web fornecido pelo consumidor sem esconder uma falha da bridge
-    // nativa já instalada.
-    return [
-      'not implemented', 'not available', 'Cannot find module',
-      'Failed to resolve module specifier', 'Unable to resolve specifier',
-      'Cannot find package', 'ERR_MODULE_NOT_FOUND',
-    ].some((phrase) => message.includes(phrase));
+  /** Síncrono e sem import: apps web puros não têm `window.Capacitor`. */
+  private isNativePlatform(): boolean {
+    try { return this.bridge()?.isNativePlatform?.() === true; }
+    catch { return false; }
+  }
+
+  /** Plugin App já registrado pelo app ou chamada direta à ponte nativa. */
+  private nativeAppInfo(): Promise<unknown> {
+    const bridge = this.bridge();
+    try {
+      const plugin = bridge?.Plugins?.['App'];
+      if (plugin?.getInfo) return Promise.resolve(plugin.getInfo());
+      if (bridge?.nativePromise) return Promise.resolve(bridge.nativePromise('App', 'getInfo', {}));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return Promise.reject(new Error('plugin App do Capacitor indisponível na ponte nativa'));
   }
 }
 

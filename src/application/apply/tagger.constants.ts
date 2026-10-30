@@ -2,6 +2,20 @@
 export const FORWARD_ACTION = /\b(avanc|proxim|continu|seguir|next|forward)/;
 export const BACKWARD_ACTION = /\b(voltar|anterior|retornar|back|previous)/;
 
+/** Palavras de código (prefixos de teste, verbos de evento) que não descrevem a ação no rótulo. */
+export const TECHNICAL_LABEL_WORDS: ReadonlySet<string> = new Set([
+  'btn', 'button', 'icon', 'ico', 'img', 'lnk', 'lbl', 'txt', 'chk', 'inp', 'testid', 'test', 'e2e',
+  'on', 'handle', 'handler', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
+]);
+
+/** Valor de atributo com forma de identificador (data-testid, id de teste), não de texto exibido. */
+export const looksLikeIdentifier = (value: string): boolean => {
+  const text = value.trim();
+  if (/\s/.test(text)) return false;
+  return /[_.]|[a-z][A-Z]/.test(text) || /^(?:btn|button|icon|ico|img|lnk|link|lbl|txt|input|inp|list|chk|test|e2e)[-_]/i.test(text)
+    || (text.match(/-/g)?.length ?? 0) >= 2;
+};
+
 /** Gestos DOM aceitos como interação observável. */
 export const DOM_GESTURES = ['(click)', '(ionChange)', '(change)', '(ngSubmit)', '(submit)'] as const;
 

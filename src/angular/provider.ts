@@ -1,12 +1,12 @@
 // T08 — provideAutoTracking: DI Angular, Injector capturado, listener único por owner, screen_view por rota
 import {
   DestroyRef,
-  ENVIRONMENT_INITIALIZER,
   NgZone,
   Injector,
   InjectionToken,
   inject,
   makeEnvironmentProviders,
+  provideEnvironmentInitializer,
   reflectComponentType,
   type EnvironmentProviders,
   type Type,
@@ -240,6 +240,6 @@ export function provideAutoTracking(options: TrackingOptions): EnvironmentProvid
   return makeEnvironmentProviders([
     { provide: TRACKING_OPTIONS, useValue: options },
     { provide: TRACKING_DISPATCHER, useFactory: () => new TrackingDispatcher(options, inject(Injector)) },
-    { provide: ENVIRONMENT_INITIALIZER, multi: true, useValue: () => new AutoTrackingLifecycle(options).start() },
+    provideEnvironmentInitializer(() => new AutoTrackingLifecycle(options).start()),
   ]);
 }

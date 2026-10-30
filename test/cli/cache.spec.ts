@@ -207,4 +207,18 @@ describe('CLI: cache conserva prova e status', () => {
     expect(decodeTrackingToken(ref)?.outputs?.[0]?.selector).toBe('#after');
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
+
+  it('pasta de saída apagada é regenerada idêntica, sem tocar templates nem perder eventos', () => {
+    write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button><a routerLink="/ajuda">Ajuda</a>');
+    expect(cli()).toMatchObject({ status: 'valid' });
+    const output = path.join(root, '.auto-tracking');
+    const report = fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8');
+    const template = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
+    fs.rmSync(output, { recursive: true, force: true });
+    expect(cli('verify').status).toBe('incomplete');
+    expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 3 });
+    expect(fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8')).toBe(report);
+    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(template);
+    expect(cli('verify').status).toBe('valid');
+  });
 });

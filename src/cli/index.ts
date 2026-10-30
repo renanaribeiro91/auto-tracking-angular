@@ -10,6 +10,7 @@ import { OutputPathResolver, type ResolvedPaths } from '../adapters/filesystem/p
 import type { PipelineResult, PlannedChange, TrackingPipeline } from '../application/apply/pipeline.js';
 import type { EvidenceWorkbookWriter, WorkbookBranding } from '../adapters/reports/evidence-writer.js';
 import { BLOCKING_DIAGNOSTIC_CODES, CLI_EXIT_CODES, CLI_HELP_TEXT } from './constants.js';
+import { GIT_HOOK_NAMES, GIT_HOOK_PURPOSE, GitRepository, installedVersionMismatch, type GitHookName } from './git-hooks.js';
 
 type Summary = Record<string, number>;
 
@@ -424,6 +425,57 @@ class AutoTrackingCli {
     return (JSON.parse(fs.readFileSync(packagePath, 'utf-8')) as { version: string }).version;
   }
 
+  /**
+   * pre-commit: aplica o tagueamento e inclui no commit só o que a lib escreveu.
+   * pre-push: apenas verifica; o push nunca leva código sem tagueamento commitado.
+   */
+  private async runHook(hook: GitHookName, root: string, configFile: string): Promise<number> {
+    const log = (message: string) => process.stderr.write(`[auto-tracking] ${message}\n`);
+    const mismatch = installedVersionMismatch(root, 'auto-tracking-angular', this.packageVersion());
+    if (mismatch) throw new Error(mismatch);
+    const repository = GitRepository.at(root);
+
+    if (hook === 'pre-push') {
+      const report = await this.run('verify', root, configFile, false);
+      const outputDir = path.dirname(path.resolve(root, report.planilha));
+      const uncommitted = repository.uncommitted(outputDir);
+      if (report.status === 'valid' && uncommitted.length === 0) return CLI_EXIT_CODES.valid;
+      for (const issue of [...(report.pendencias ?? []), ...uncommitted.map((entry) => `não commitado: ${entry.slice(3)}`)]) log(issue);
+      for (const diagnostic of report.diagnosticos ?? []) {
+        if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
+      }
+      log('push bloqueado: faça um commit (o pre-commit atualiza o tagueamento) e repita o push.');
+      return CLI_EXIT_CODES.incomplete;
+    }
+
+    const unstagedBefore = repository.unstagedFiles();
+    const report = await this.run('apply', root, configFile, false);
+    const written = (report.written ?? []).map((file) => repository.relative(path.resolve(root, file)));
+    if (report.status !== 'valid') {
+      for (const diagnostic of report.diagnosticos ?? []) {
+        if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
+      }
+      log('commit bloqueado: tagueamento incompleto (detalhes acima).');
+      return CLI_EXIT_CODES.incomplete;
+    }
+    // Template com edição não preparada: incluir a marcação levaria junto a
+    // edição pela metade do desenvolvedor. A marcação já está gravada nele.
+    // Relatório, planilha e cache são inteiramente gerados pela lib: sempre entram.
+    const outputDir = `${repository.relative(path.dirname(path.resolve(root, report.planilha)))}/`;
+    const conflicts = written.filter((file) => unstagedBefore.has(file) && !file.startsWith(outputDir));
+    if (conflicts.length) {
+      for (const file of conflicts) log(`marcação atualizada em arquivo com alterações não preparadas: ${file}`);
+      log('commit bloqueado: revise esses arquivos, rode git add e repita o commit.');
+      return CLI_EXIT_CODES.incomplete;
+    }
+    // A pasta de saída é da lib: inclui também o que uma execução manual anterior gerou.
+    const generated = repository.uncommitted(path.resolve(repository.root, outputDir)).map((entry) => entry.slice(3));
+    const toStage = repository.trackable([...new Set([...written, ...generated])]);
+    repository.stage(toStage);
+    if (toStage.length) log(`${toStage.length} arquivo(s) de tagueamento atualizados e incluídos neste commit.`);
+    return CLI_EXIT_CODES.valid;
+  }
+
   async main(): Promise<number> {
     const [command, args] = this.normalizeCommand(process.argv.slice(2));
     if (command === '--help' || args.includes('--help')) {
@@ -434,13 +486,34 @@ class AutoTrackingCli {
       process.stdout.write(`${this.packageVersion()}\n`);
       return CLI_EXIT_CODES.valid;
     }
+    const root = path.resolve(this.option(args, '--root') ?? process.cwd());
+    const configFile = path.resolve(root, this.option(args, '--config') ?? 'auto-tracking.config.ts');
+    if (command === 'hooks') {
+      const repository = GitRepository.at(root);
+      if (args[0] === 'install') {
+        process.stdout.write(`hooks instalados: ${repository.installHooks(root).join(', ')}\n`);
+        return CLI_EXIT_CODES.valid;
+      }
+      if (args[0] === 'status') {
+        const status = repository.hookStatus(root);
+        const lines = [`diretório de hooks do git: ${status.hooksDir}`];
+        for (const { hook, file, state } of status.hooks) lines.push(`${hook.padEnd(10)} ${state.padEnd(13)} ${file}`, `           ${GIT_HOOK_PURPOSE[hook]}`);
+        if (status.hooks.some((item) => item.state !== 'instalado')) lines.push('execute: auto-tracking hooks install');
+        process.stdout.write(`${lines.join('\n')}\n`);
+        return status.hooks.every((item) => item.state === 'instalado') ? CLI_EXIT_CODES.valid : CLI_EXIT_CODES.incomplete;
+      }
+      throw new Error('uso: auto-tracking hooks install | hooks status');
+    }
+    if (command === 'hook') {
+      const hook = args[0] as GitHookName;
+      if (!GIT_HOOK_NAMES.includes(hook)) throw new Error(`hook desconhecido: ${args[0] ?? ''} (use ${GIT_HOOK_NAMES.join(' ou ')})`);
+      return this.runHook(hook, root, configFile);
+    }
     if (command !== 'apply' && command !== 'verify') {
       throw new Error(`comando desconhecido: ${command} (rode sem comando, ou use verify)`);
     }
 
     const json = args.includes('--json') || (!process.stdout.isTTY && !args.includes('--pretty'));
-    const root = path.resolve(this.option(args, '--root') ?? process.cwd());
-    const configFile = path.resolve(root, this.option(args, '--config') ?? 'auto-tracking.config.ts');
     const startedAt = Date.now();
     const report = await this.run(command, root, configFile, args.includes('--dry-run'));
     const output = json

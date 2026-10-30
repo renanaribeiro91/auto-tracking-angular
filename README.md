@@ -17,13 +17,13 @@ Isso não equivale a certificar o comportamento de todo componente externo. Even
 ## Requisitos
 
 - Node.js 18.18 ou posterior.
-- Angular 16 ou posterior; TypeScript 4.9 ou posterior.
-- Ionic Angular 7 ou posterior e Capacitor 5 ou posterior, quando utilizados pelo aplicativo.
+- Angular 19 ou posterior (versões com suporte oficial; o provider usa `provideEnvironmentInitializer`); TypeScript 4.9 ou posterior para o CLI.
+- Ionic e Capacitor são opcionais: componentes `ion-*` são reconhecidos pelo DOM, e no app nativo a identidade vem da ponte `window.Capacitor` (Capacitor 3+), sem a lib importar pacotes `@capacitor/*` ou `@ionic/*`.
 - Projeto Angular com `angular.json` e `tsconfig` do projeto a ser analisado.
 
 ## Instalação e desenvolvimento local
 
-Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `1.0.7` inclui o runtime com descoberta incremental de DOM, isolamento de owners, redução de chamadas nativas e suporte a Angular sem Capacitor. Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
+Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `2.0.0` envia o mesmo rótulo da planilha (sem `(not set)`), não importa pacotes do Capacitor no runtime e instala hooks git nativos (`auto-tracking hooks install`). Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
 
 Na pasta da biblioteca:
 
@@ -201,7 +201,7 @@ runtime: {
 <button (click)="excluir()" data-at-ref="v1.eJ...">Excluir {{ pessoa.nome }}</button>
 ```
 
-`v1.eJ...` é **ilustrativo**, não um token real. O token real contém todos os metadados necessários para gerar o evento: owner, funcionalidade, tela, screen_view, ID, gesto, rótulo-fallback, `@Output`, seletor e regras de opção selecionada. O CLI cria um token **determinístico**, versionado e compactado com DEFLATE, seguro para atributos HTML. Não é criptografia nem um hash irreversível; não coloque segredos no token. O runtime decodifica na primeira leitura e usa cache LRU limitado nos eventos seguintes. Ele continua observando o DOM e Shadow DOM, obtendo rótulos e opções dinâmicas no instante do gesto.
+`v1.eJ...` é **ilustrativo**, não um token real. O token real contém todos os metadados necessários para gerar o evento: owner, funcionalidade, tela, screen_view, ID, gesto, rótulo-fallback, `@Output`, seletor e regras de opção selecionada. O CLI cria um token **determinístico**, versionado e compactado com DEFLATE, seguro para atributos HTML. Não é criptografia nem um hash irreversível; não coloque segredos no token. O runtime decodifica na primeira leitura e usa cache LRU limitado nos eventos seguintes. O `rotulo` enviado é o mesmo da planilha; texto variável da tela (nomes, valores) nunca é enviado. Em itens de lista estática do componente, o valor visível do item clicado é enviado somente se estiver entre os valores literais provados pelo CLI. Opções selecionadas seguem em `opcao_selecionada_1`.
 
 **Não há `trackingManifest`, importação de relatório, fetch de JSON nem outro arquivo de lookup no navegador.** O runtime recebe apenas o token do próprio HTML; valida os parâmetros com o schema e chama `send`. O aplicativo é responsável por conectar `send` ao AnalyticsAdapter/Firebase. Se token, owner, ambiente ou schema não forem válidos, o evento não é enviado.
 

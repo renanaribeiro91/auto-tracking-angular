@@ -88,7 +88,7 @@ export class EvidenceWorkbookWriter {
           elemento: entry.elemento,
           tela: screen,
           categoria: entry.evento === 'click' ? screen : '',
-          rotulo: entry.rotuloDinamico ? 'dinâmico (atributo acessível ou texto exibido)' : entry.rotulo,
+          rotulo: entry.rotulos?.length ? entry.rotulos.join(' | ') : entry.rotulo,
           opcaoSelecionada: entry.opcao_selecionada_1 ?? '',
           origem: entry.origem,
           arquivo: entry.arquivo,

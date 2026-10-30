@@ -1,11 +1,11 @@
 import { AppIdentityResolver } from '../../src/adapters/runtime/identity-resolver.js';
-import { App } from '@capacitor/app';
 import { examplePreset } from '../fixtures/preset/index.js';
 
-jest.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => true } }));
-jest.mock('@capacitor/app', () => ({ App: { getInfo: jest.fn() } }));
-
-const native = App.getInfo as jest.Mock;
+// Ponte instalada pelo runtime nativo do Capacitor no WebView; a lib não importa @capacitor/*.
+const native = jest.fn();
+const globals = globalThis as { Capacitor?: unknown };
+beforeAll(() => { globals.Capacitor = { isNativePlatform: () => true, Plugins: { App: { getInfo: native } } }; });
+afterAll(() => { delete globals.Capacitor; });
 
 describe('ponte nativa: resoluções concorrentes e falhas não causam tempestade de chamadas', () => {
   beforeEach(() => { native.mockReset(); });
@@ -33,13 +33,13 @@ describe('ponte nativa: resoluções concorrentes e falhas não causam tempestad
   });
 
   it('quando a plataforma é nativa, a falha do plugin não vira tema Web silenciosamente', async () => {
-    native.mockRejectedValue(new Error('Cannot find module Capacitor/App'));
+    native.mockRejectedValue(new Error('"App" plugin is not implemented on android'));
     const resolver = new AppIdentityResolver();
     const getWebTheme = jest.fn(() => 'saude');
     const result = await resolver.resolve(examplePreset, getWebTheme);
     expect(result).toEqual({
       kind: 'unknown',
-      reason: expect.stringContaining('Cannot find module Capacitor/App'),
+      reason: expect.stringContaining('not implemented on android'),
     });
     expect(getWebTheme).not.toHaveBeenCalled();
   });
@@ -53,5 +53,19 @@ describe('ponte nativa: resoluções concorrentes e falhas não causam tempestad
     expect(first).toEqual({ kind: 'unknown', reason: expect.stringContaining('bridge unavailable') });
     expect(second).toEqual(first);
     expect(native).toHaveBeenCalledTimes(1);
+  });
+
+  it('sem plugin App registrado, chama a ponte nativa diretamente', async () => {
+    const nativePromise = jest.fn().mockResolvedValue({ id: 'com.exemplo.saude.mobile' });
+    globals.Capacitor = { isNativePlatform: () => true, nativePromise, Plugins: {} };
+    const result = await new AppIdentityResolver().resolve(examplePreset, () => 'saude');
+    expect(result).toEqual({ kind: 'native', result: { bundleId: 'com.exemplo.saude.mobile', environment: 'app-x' } });
+    expect(nativePromise).toHaveBeenCalledWith('App', 'getInfo', {});
+  });
+
+  it('nativo sem ponte para App gera diagnóstico, nunca exceção', async () => {
+    globals.Capacitor = { isNativePlatform: () => true, Plugins: {} };
+    const result = await new AppIdentityResolver().resolve(examplePreset, () => 'saude');
+    expect(result).toEqual({ kind: 'unknown', reason: expect.stringContaining('indisponível') });
   });
 });

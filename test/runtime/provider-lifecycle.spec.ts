@@ -4,12 +4,12 @@ import { examplePreset } from '../fixtures/preset/index.js';
 
 // O teste executa o lifecycle real com um container DI controlado, sem app consumidor.
 const tokens = {
-  INITIALIZER: Symbol('ENVIRONMENT_INITIALIZER'),
+  INITIALIZER: Symbol('environment-initializer'),
   DOCUMENT: Symbol('DOCUMENT'),
 };
 let dependencyContext = new Map<unknown, unknown>();
 jest.mock('@angular/core', () => ({
-  ENVIRONMENT_INITIALIZER: tokens.INITIALIZER,
+  provideEnvironmentInitializer: (initializer: () => void) => ({ provide: tokens.INITIALIZER, useValue: initializer }),
   Injector: class Injector {},
   DestroyRef: class DestroyRef {},
   NgZone: class NgZone {},
@@ -24,7 +24,7 @@ jest.mock('@angular/router', () => ({
   NavigationEnd: class NavigationEnd {},
 }));
 
-import { DestroyRef, Injector, NgZone, ENVIRONMENT_INITIALIZER } from '@angular/core';
+import { DestroyRef, Injector, NgZone } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { Router } from '@angular/router';
 import { provideAutoTracking, TRACKING_DISPATCHER, TrackingDispatcher } from '../../src/angular/provider.js';
@@ -49,7 +49,7 @@ function activate(owner: string, sent: TrackingEvent[]): () => void {
     [NgZone, { runOutsideAngular: (callback: () => void) => { zoneRuns(); return callback(); } }],
     [DestroyRef, { onDestroy: (fn: () => void) => cleanup.push(fn) }],
   ]);
-  providers.find((entry) => entry.provide === ENVIRONMENT_INITIALIZER)?.useValue?.();
+  providers.find((entry) => entry.provide === tokens.INITIALIZER)?.useValue?.();
   return () => cleanup.forEach((fn) => fn());
 }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));

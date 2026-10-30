@@ -18,4 +18,6 @@ export interface TrackingElement {
   };
   readonly outputs?: readonly OutputBinding[];
   readonly overlayOutputs?: readonly OutputBinding[];
+  /** Rótulos literais provados no código (item de lista estática); o visível só é enviado se estiver aqui. */
+  readonly rotulos?: readonly string[];
 }

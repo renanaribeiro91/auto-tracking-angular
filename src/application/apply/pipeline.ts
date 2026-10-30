@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
-import { numericSelectionMethods } from './selection-provenance.js';
+import { numericSelectionMethods, staticListLabels } from './selection-provenance.js';
 import { ComponentScreenResolver } from './component-screen-resolver.js';
 import type { ComponentInfo, ProjectIndex } from './ports/project-index.js';
 import { ScreenIdentityResolver } from './screen-identity-resolver.js';
@@ -175,6 +175,7 @@ export class TrackingPipeline {
           isScreen: index.routedComponents.has(t.c.key),
           catalog,
           selectionMethods: numericSelectionMethods(t.c, index.components),
+          listLabels: staticListLabels(t.c),
           usedIds,
           claimedIds,
           attrQuote: t.inline?.quote === '"' ? "'" : '"',

@@ -11,7 +11,7 @@ it('centraliza o resumo e aplica o mesmo fundo a todas as abas', async () => {
   const item = (modulo: string): TagEntry => ({
     id: `${modulo}-botao`, owner: 'app', evento: 'click', acao: 'clique', elemento: 'botao',
     funcionalidade: modulo, tela: 'inicio', telas: [`${modulo}:inicio`], rotulo: 'botao',
-    rotuloDinamico: false, origem: '(click)', arquivo: 'a.html', linha: 1,
+    origem: '(click)', arquivo: 'a.html', linha: 1,
   });
   try {
     await writeEvidenceWorkbook(file, {

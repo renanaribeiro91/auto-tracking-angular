@@ -77,3 +77,36 @@ export function numericSelectionMethods(component: ComponentInfo, components: re
   }
   return result;
 }
+
+/**
+ * Valores literais de `propriedade` em cada item de uma lista declarada na
+ * classe (`itens = [{ titulo: 'A' }, …]`). Só listas inteiramente estáticas
+ * provam o conjunto; qualquer item não literal invalida a prova.
+ */
+export function staticListLabels(component: ComponentInfo): (list: string, property: string) => readonly string[] | null {
+  let declaration: ts.ClassDeclaration | undefined;
+  let parsed = false;
+  const unwrap = (node: ts.Expression): ts.Expression =>
+    ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node;
+  return (list, property) => {
+    if (!parsed) {
+      parsed = true;
+      declaration = ts.createSourceFile('component.ts', component.classText, ts.ScriptTarget.Latest, true).statements.find(ts.isClassDeclaration);
+    }
+    const member = declaration?.members.find((item): item is ts.PropertyDeclaration =>
+      ts.isPropertyDeclaration(item) && ts.isIdentifier(item.name) && item.name.text === list);
+    const initializer = member?.initializer && unwrap(member.initializer);
+    if (!initializer || !ts.isArrayLiteralExpression(initializer) || initializer.elements.length === 0) return null;
+    const values: string[] = [];
+    for (const element of initializer.elements) {
+      const item = unwrap(element as ts.Expression);
+      if (!ts.isObjectLiteralExpression(item)) return null;
+      const assignment = item.properties.find((entry): entry is ts.PropertyAssignment => ts.isPropertyAssignment(entry)
+        && (ts.isIdentifier(entry.name) || ts.isStringLiteral(entry.name)) && entry.name.text === property);
+      const value = assignment && unwrap(assignment.initializer);
+      if (!value || !ts.isStringLiteralLike(value)) return null;
+      values.push(value.text);
+    }
+    return values;
+  };
+}

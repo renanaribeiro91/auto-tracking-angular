@@ -1,6 +1,8 @@
 import { tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
 import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 import type { ComponentCatalog, ComponentDef } from '../../src/application/apply/ports/component-catalog.js';
+import { staticListLabels } from '../../src/application/apply/selection-provenance.js';
+import type { ComponentInfo } from '../../src/application/apply/ports/project-index.js';
 
 const def = (over: Partial<ComponentDef> & Pick<ComponentDef, 'selectors'>): ComponentDef => ({
   source: 'design-lib',
@@ -48,15 +50,87 @@ const ctx = (over: Partial<TagContext> = {}): TagContext => ({
 });
 
 describe('tagger: toda interação declarada no template', () => {
-  it('registra aria-label literal vinculado em vez do fallback de método', () => {
+  it('identificador de teste em aria-label vira rótulo sem prefixo técnico e substitui rótulo técnico antigo', () => {
     const result = tagTemplate(`<ion-icon data-at-id="rating" data-at-rotulo="on-cliked" [attr.aria-label]="'icon-star-ranking-avaliar'" (click)="onCliked()"></ion-icon>`, ctx());
-    expect(result.entries[0]).toMatchObject({ id: 'rating', rotulo: 'icon-star-ranking-avaliar', rotuloDinamico: false });
+    expect(result.entries[0]).toMatchObject({ id: 'rating', rotulo: 'star-ranking-avaliar' });
     expect(result.html).toContain('data-at-id="rating"');
+    expect(result.html).toContain('data-at-rotulo="star-ranking-avaliar"');
   });
 
-  it('marca como dinâmico um aria-label ligado a expressão não literal', () => {
+  it('preserva rótulo manual legível já gravado', () => {
+    const result = tagTemplate('<button data-at-rotulo="enviar-pedido" (click)="salvar()">Salvar</button>', ctx());
+    expect(result.entries[0]).toMatchObject({ rotulo: 'enviar-pedido' });
+  });
+
+  it('title humano prevalece sobre data-testid usado como aria-label', () => {
+    const result = tagTemplate(`<bsad-button title="Prosseguir" [attr.aria-label]="'btn-anexar-pedido-medico-prosseguir'" (click)="navegarParaProsseguir()"></bsad-button>`, ctx());
+    expect(result.entries[0]).toMatchObject({ rotulo: 'prosseguir' });
+  });
+
+  it('handler sem texto perde palavras de código; data-testid é o próximo recurso', () => {
+    expect(tagTemplate('<bsad-header (click)="cliqueVoltar()"></bsad-header>', ctx()).entries[0]!.rotulo).toBe('voltar');
+    expect(tagTemplate('<div (click)="clickCheckbox()"></div>', ctx()).entries[0]!.rotulo).toBe('checkbox');
+    expect(tagTemplate(`<ion-icon [attr.data-testid]="'icon-card-acompanhamento-lupa'" (click)="clique()"></ion-icon>`, ctx()).entries[0]!.rotulo)
+      .toBe('card-acompanhamento-lupa');
+  });
+
+  it('wrapper sem texto usa o rótulo único do filho', () => {
+    const result = tagTemplate('<div (click)="clickCheckbox()"><bsad-form-checkbox label="Agendar em dias diferentes"></bsad-form-checkbox></div>', ctx());
+    expect(result.entries[0]!.rotulo).toBe('agendar-em-dias-diferentes');
+  });
+
+  it('expressão com ">" em atributo de filho não vaza para o rótulo', () => {
+    const html = `<div (click)="abrirModalLocalizacao()" [attr.aria-label]="'btn-welcome-home-abrir-localizacao'"><x-select [enable]="lista.length > 0" [label]="ok ? 'a' : 'b'"></x-select></div>`;
+    expect(tagTemplate(html, ctx()).entries[0]!.rotulo).toBe('abrir-modal-localizacao');
+  });
+
+  it('title ligado a literal é rótulo; texto longo projetado em componente não é', () => {
+    expect(tagTemplate(`<bsad-button [title]="'Avançar'" (click)="avancar()"></bsad-button>`, ctx()).entries[0]!.rotulo).toBe('avancar');
+    const modal = tagTemplate('<x-modal (click)="onModalCloseButton()"><p>Ao ser redirecionado para efetuar a ligação o aplicativo pode fechar</p></x-modal>', ctx());
+    expect(modal.entries[0]!.rotulo).toBe('modal-close');
+  });
+
+  it('argumento literal já contido no handler não é repetido', () => {
+    expect(tagTemplate(`<button (click)="editarLocalAtendimento('local-atendimento')"></button>`, ctx()).entries[0]!.rotulo).toBe('editar-local-atendimento');
+    expect(tagTemplate(`<button (click)="abrir('termos')"></button>`, ctx()).entries[0]!.rotulo).toBe('abrir-termos');
+    expect(tagTemplate(`<button (click)="selecionarPlano('plan')"></button>`, ctx()).entries[0]!.rotulo).toBe('selecionar-plano-plan');
+  });
+
+  it('URL no argumento do handler não entra no rótulo', () => {
+    expect(tagTemplate(`<a (click)="redireciona('http://www.exemplo.invalid')"><img src="x.png"></a>`, ctx()).entries[0]!.rotulo).toBe('redireciona');
+  });
+
+  describe('rótulo de item de lista estática', () => {
+    const classText = `class MenuPage {
+      itens = [{ titulo: 'Saúde em equilíbrio', rota: 'a' }, { titulo: 'Salas<br>VIP', rota: 'b' }] as const;
+      @Input() externos: Item[] = [];
+      mistos = [{ titulo: 'A' }, { titulo: this.nome }];
+    }`;
+    const listLabels = staticListLabels({ classText } as ComponentInfo);
+
+    it('extrai somente listas inteiramente literais', () => {
+      expect(listLabels('itens', 'titulo')).toEqual(['Saúde em equilíbrio', 'Salas<br>VIP']);
+      expect(listLabels('externos', 'titulo')).toBeNull();
+      expect(listLabels('mistos', 'titulo')).toBeNull();
+      expect(listLabels('itens', 'inexistente')).toBeNull();
+    });
+
+    it('*ngFor no próprio elemento e @for no ancestral provam o conjunto; valor variável fica fora', () => {
+      const own = tagTemplate('<x-botao *ngFor="let b of itens" [title]="b.titulo" (click)="navegarPara(b)"></x-botao>', ctx({ listLabels, mode: 'ref' }));
+      expect(own.entries[0]).toMatchObject({ rotulo: 'navegar-para', rotulos: ['saude-em-equilibrio', 'salas-vip'] });
+      expect(decodeTrackingToken(own.entries[0]!.ref!)?.rotulos).toEqual(['saude-em-equilibrio', 'salas-vip']);
+      const block = tagTemplate('@for (op of itens; track op.rota) { <button (click)="abrir(op)">{{ op.titulo }}</button> }', ctx({ listLabels }));
+      expect(block.entries[0]!.rotulos).toEqual(['saude-em-equilibrio', 'salas-vip']);
+      expect(block.html).toContain('data-at-rotulos="saude-em-equilibrio|salas-vip"');
+      const external = tagTemplate('<x-botao *ngFor="let b of externos" [title]="b.titulo" (click)="abrir(b)"></x-botao>', ctx({ listLabels }));
+      expect(external.entries[0]).toMatchObject({ rotulo: 'abrir' });
+      expect(external.entries[0]!.rotulos).toBeUndefined();
+    });
+  });
+
+  it('aria-label dinâmico não vira rótulo: valor variável nunca é enviado, usa o nome da ação', () => {
     const result = tagTemplate('<button [attr.aria-label]="item.nome" (click)="escolher()"></button>', ctx());
-    expect(result.entries[0]).toMatchObject({ rotulo: '', rotuloDinamico: true });
+    expect(result.entries[0]).toMatchObject({ rotulo: 'escolher' });
   });
   it('documenta seleção dinâmica apenas quando há evento de mudança observável', () => {
     const selection = tagTemplate('<ion-select (ionChange)="selecionar($event)"></ion-select>', ctx());
@@ -77,9 +151,9 @@ describe('tagger: toda interação declarada no template', () => {
 
   it('botão só com ícone recebe rótulo pelo handler; texto interpolado é dinâmico', () => {
     const icone = tagTemplate('<ion-button (click)="abrirFiltro()"><ion-icon name="x"></ion-icon></ion-button>', ctx());
-    expect(icone.entries[0]).toMatchObject({ rotulo: 'abrir-filtro', rotuloDinamico: false });
+    expect(icone.entries[0]).toMatchObject({ rotulo: 'abrir-filtro' });
     const dinamico = tagTemplate('<ion-item (click)="selecionar(item)">{{ item.nome }}</ion-item>', ctx());
-    expect(dinamico.entries[0]).toMatchObject({ rotulo: '', rotuloDinamico: true, elemento: 'lista' });
+    expect(dinamico.entries[0]).toMatchObject({ rotulo: 'selecionar', elemento: 'lista' });
   });
 
   it('rótulo ignora blocos @if/@else e URLs; id fica curto', () => {

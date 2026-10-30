@@ -7,7 +7,7 @@ import type { TagEntry } from '../../src/application/apply/tagger.js';
 
 const entry = (over: Partial<TagEntry>): TagEntry => ({
   id: 'reembolso-tipo-avancar', owner: 'mob', evento: 'click', acao: 'clique', elemento: 'botao', funcionalidade: 'reembolso',
-  tela: 'tipo', telas: ['reembolso:tipo'], rotulo: 'avancar', rotuloDinamico: false, origem: '(click)', arquivo: 'a.html', linha: 1, ...over,
+  tela: 'tipo', telas: ['reembolso:tipo'], rotulo: 'avancar', origem: '(click)', arquivo: 'a.html', linha: 1, ...over,
 });
 
 describe('planilha de evidência', () => {
@@ -25,18 +25,18 @@ describe('planilha de evidência', () => {
     expect(String(workbook.getWorksheet('Resumo')?.getCell('B5').value)).not.toMatch(/marca-especifica|cliente-real/i);
     await expect(writeEvidenceWorkbook(file, { ...input, branding: { primaryColor: 'invalida' } }, 'sig')).rejects.toThrow('#RRGGBB');
   });
-  it('identifica rótulo e opção dinâmicos sem apresentar o nome do handler como texto', async () => {
+  it('mostra o rótulo exatamente como enviado e identifica a opção dinâmica', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-dynamic-')), 'e.xlsx');
     await writeEvidenceWorkbook(file, {
       owner: 'mob', product: 'saude', branding: {},
-      entries: [entry({ rotulo: 'on-cliked', rotuloDinamico: true, opcao_selecionada_1: 'dinâmica (opção selecionada)' })],
+      entries: [entry({ rotulo: 'avaliar', opcao_selecionada_1: 'dinâmica (opção selecionada)' })],
     }, 'sig');
     const zip = await JSZip.loadAsync(fs.readFileSync(file));
     const strings = await zip.file('xl/sharedStrings.xml')!.async('string');
     expect(strings).toContain('Opção selecionada');
     expect(strings).toContain('dinâmica (opção selecionada)');
-    expect(strings).toContain('dinâmico (atributo acessível ou texto exibido)');
-    expect(strings).not.toContain('on-cliked');
+    expect(strings).toContain('avaliar');
+    expect(strings).not.toContain('dinâmico (atributo acessível ou texto exibido)');
   });
   it('links de módulo e de volta ao resumo são hyperlinks internos nativos (sem relacionamento externo)', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-xlsx-')), 'e.xlsx');
@@ -82,7 +82,7 @@ describe('planilha de evidência', () => {
     const marks = [0, 0, 0, 0];
     for (let y = 0; y < bg.height; y++) for (let x = 0; x < bg.width; x++) {
       const offset = (y * bg.width + x) * 4;
-      if (bg.data[offset + 1]! < 245) marks[Number(x >= bg.width / 2) + 2 * Number(y >= bg.height / 2)]++;
+      if (bg.data[offset + 1]! < 245) marks[Number(x >= bg.width / 2) + 2 * Number(y >= bg.height / 2)]! += 1;
     }
     expect(marks.every((pixels) => pixels > 100)).toBe(true);
     const ExcelJS = (await import('exceljs')).default;

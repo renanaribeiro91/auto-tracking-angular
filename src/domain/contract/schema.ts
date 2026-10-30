@@ -26,7 +26,11 @@ export function validateEvent(event: TrackingEvent, schema: TrackingSchema): Val
   const rule = schema[event.name];
   if (!rule) return { kind: 'valid' }; // evento não coberto pelo schema = permitido
   const keys = Object.keys(event.params);
-  const missing = rule.requiredParams.filter((p) => !keys.includes(p));
+  // Valor vazio chega ao analytics como "(not set)": equivale a parâmetro ausente.
+  const missing = rule.requiredParams.filter((p) => {
+    const value = event.params[p];
+    return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+  });
   if (missing.length > 0) return { kind: 'missing-params', params: missing };
   const extra = keys.filter((k) => !rule.allowedParams.includes(k));
   if (extra.length > 0) return { kind: 'extra-params', params: extra };

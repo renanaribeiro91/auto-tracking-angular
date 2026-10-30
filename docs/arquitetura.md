@@ -28,7 +28,7 @@ auto-tracking.config.ts ──AST──▶ CLI apply ──▶ templates com dat
 
 O `verify` executa o mesmo cálculo em memória e não escreve nada. O cache reutiliza os artefatos somente depois de reanalisar as fontes e as dependências instaladas; não substitui a prova atual por um fingerprint antigo. Avisos e falhas usam a mesma política com ou sem cache.
 
-O relatório e a planilha registram `opcao_selecionada_1` como dinâmica quando o gesto comprovado fornece uma escolha. No runtime, esse parâmetro é separado do `rotulo`: controles de mudança usam o texto da opção correspondente; objetos sem opção correspondente não são convertidos em texto inventado. Em componentes repetidos, um clique pode fornecer opção numérica quando a análise comprova a emissão direta de um input numérico e uma origem literal nos consumidores. Outras origens não são inferidas por essa regra. Rótulos dinâmicos não são conhecidos em tempo de geração; o runtime lê o atributo acessível ou o texto disponível no momento do evento.
+O relatório e a planilha registram `opcao_selecionada_1` como dinâmica quando o gesto comprovado fornece uma escolha. No runtime, esse parâmetro é separado do `rotulo`: controles de mudança usam o texto da opção correspondente; objetos sem opção correspondente não são convertidos em texto inventado. Em componentes repetidos, um clique pode fornecer opção numérica quando a análise comprova a emissão direta de um input numérico e uma origem literal nos consumidores. Outras origens não são inferidas por essa regra. O `rotulo` enviado é sempre o da planilha: texto variável (interpolação, `@Input`, store, API) não é enviado, pois pode conter dados pessoais; nesses casos o rótulo é o nome da ação. Quando o rótulo vem de um item de `*ngFor`/`@for` sobre uma lista literal da classe (`[title]="item.titulo"`), o CLI grava os valores possíveis e o runtime envia o do item clicado somente se for um deles.
 
 Formulários com `(ngSubmit)` ou `(submit)` são capturados pelo evento DOM `submit`, inclusive por teclado. Inputs continuam excluídos. A cobertura no template filho é explícita, evitando marcar novamente o output no pai. IDs duplicados são reconciliados e o tipo de evento é atualizado quando o binding muda.
 
@@ -57,7 +57,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 | `data-at-screen` | 1º elemento renderizado do componente roteado | ID da tela |
 
 **Reconciliação:**
-- IDs e rótulos existentes são preservados; ajustes manuais nesses valores são suportados.
+- IDs existentes são preservados. No modo `classic`, rótulo manual legível é preservado; rótulo técnico (`btn-…`, `on-…`, `click…`) é regenerado.
 - `data-at-owner`, funcionalidade e tela são derivados da configuração/estrutura atuais e sempre são reconciliados pelo comando.
 - Atributos ausentes são repostos no modo `classic`; em `ref`, apenas o token inteiro é recalculado quando o contrato semântico muda.
 - Um atributo sem prova atual sai do template: o handler foi removido, o componente deixou de ser roteado ou o atributo foi descontinuado.
@@ -68,7 +68,8 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 - **Módulo** (`data-at-funcionalidade`, aba da planilha): a pasta mais próxima acima da tela que tenha `common/constants` ou `common/enums` (padrão do time); sem ela, a pasta-mãe da tela. Pastas técnicas do Angular/Ionic (`pages`, `components`, `modals`, `shared`, `core`, `containers`, `features`…) nunca viram módulo.
 - **Unicidade**: duas telas nunca compartilham `módulo:tela`. Se colidirem, só as envolvidas são refinadas — primeiro pela pasta da tela e depois pelo caminho completo. Se uma rota usa um nome de classe homônimo sem import que identifique a declaração, o CLI registra `ROUTED_COMPONENT_AMBIGUOUS` em vez de associar as telas por engano.
 - Módulo e tela são sempre regravados a partir da estrutura atual (mudou a pasta, o template acompanha). O ID gerado para o mesmo gesto é estável entre execuções.
-- **ID**: `<módulo>-<tela>-<nome>`, `nome` = primeiras palavras do texto visível estático (sem `@if`/`@for`, sem URL) ou do handler. O owner não compõe o ID; trocar `runtime.owner` atualiza todos os atributos de ownership mantendo IDs estáveis.
+- **ID**: `<módulo>-<tela>-<nome>`, `nome` = primeiras palavras do rótulo.
+- **Rótulo**, em ordem: `aria-label`/`label`/`title` humanos (estáticos ou literal ligado); texto próprio do elemento (em componente customizado, só se curto, pois o conteúdo é projetado); rótulo único de um filho; nome do handler sem palavras de código (`cliqueVoltar` → `voltar`); `data-testid`/id de teste sem prefixo técnico. Nunca vazio. O owner não compõe o ID; trocar `runtime.owner` atualiza todos os atributos de ownership mantendo IDs estáveis.
 - **Tela de um componente**: o motor sobe até a rota por todos os caminhos de Angular — seletor em template, referência na classe, cadeia de serviços (inclusive `ModalService`/use-cases) e effects NgRx (pela action despachada). Componente sem nenhum uso e a casca do app (`app-root`) não entram na planilha; no runtime, emitem com a tela onde o usuário está.
 
 ## Runtime
@@ -95,7 +96,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 | `categoria` | igual a `tela` | — |
 | `acao` | `clique` | não enviada |
 | `elemento` | atributo (`classic`) ou token decodificado (`ref`) | não enviado |
-| `rotulo` | texto visível no instante do gesto | — |
+| `rotulo` | rótulo do contrato (igual à planilha); em item de lista estática, o valor provado do item clicado | — |
 | `opcao_selecionada_1` | opção escolhida (`ionChange`) | — |
 
 ### Identidade de ambiente
@@ -141,4 +142,4 @@ O valor acima é ilustrativo; um token real é gerado pelo CLI e usa DEFLATE (fo
 
 No modo `classic`, o CLI gera o contrato original `data-at-id`, `data-at-owner`, `data-at-event`, `data-at-elemento`, `data-at-rotulo`, `data-at-outputs` e demais atributos necessários. O runtime lê esses atributos como antes. A configuração de build deve usar o **mesmo modo do CLI e do provider**; tokens de modo diferente não são consumidos. O primeiro `tracking` cria ou reconcilia os eventos; a segunda execução deve escrever zero arquivos. Referências malformadas não são decodificadas nem geram eventos.
 
-Rótulos dinâmicos e valores selecionados não são congelados dentro do token: o runtime consulta o elemento acessível e o `detail` do evento no instante da interação. Listeners do documento são removidos quando o provider é destruído. A importação da biblioteca pode adicionar código de descompressão ao bundle; o custo deve ser verificado no build real. Ambos os modos precisam ter os caminhos causais validados com o adaptador real antes do deploy.
+Valores selecionados não são congelados no token: o runtime consulta o `detail` do evento no instante da interação. Parâmetro obrigatório vazio é rejeitado pelo schema e não é enviado (evita `(not set)`). Listeners do documento são removidos quando o provider é destruído. O runtime usa só a build de descompressão do pako (43 KB minificado, 15,5 KB gzip no total); a compressão fica no CLI. Ambos os modos precisam ter os caminhos causais validados com o adaptador real antes do deploy.

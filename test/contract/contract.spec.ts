@@ -25,6 +25,10 @@ describe('contrato público', () => {
       const { categoria: _omit, ...semCategoria } = click;
       expect(validateEvent({ name: 'click', params: semCategoria }, schema)).toEqual({ kind: 'missing-params', params: ['categoria'] });
     });
+    it('campo obrigatório vazio é rejeitado: chegaria ao analytics como (not set)', () => {
+      expect(validateEvent({ name: 'click', params: { ...click, rotulo: '' } }, schema)).toEqual({ kind: 'missing-params', params: ['rotulo'] });
+      expect(validateEvent({ name: 'click', params: { ...click, tela: '  ' } }, schema)).toEqual({ kind: 'missing-params', params: ['tela'] });
+    });
     it('campo fora do contrato do Builder é rejeitado', () => {
       expect(validateEvent({ name: 'click', params: { ...click, label: 'x' } }, schema)).toEqual({ kind: 'extra-params', params: ['label'] });
     });

@@ -1,4 +1,5 @@
-import { decodeTrackingToken, encodeTrackingToken, TrackingTokenCache } from '../../src/domain/contract/tracking-token.js';
+import { decodeTrackingToken, TrackingTokenCache } from '../../src/domain/contract/tracking-token.js';
+import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
 import type { TrackingElement } from '../../src/domain/contract/tracking-element.js';
 import { deflateRaw } from 'pako';
 
@@ -38,6 +39,12 @@ describe('token autocontido: codec versionado e sem estado externo', () => {
     expect(() => encodeTrackingToken({ ...contract, outputs: Array.from({ length: 65 }, (_, index) => ({
       id: `id-${index}`, event: 'click', selector: '#button', label: 'selecionar', output: 'ok',
     })) })).toThrow('contrato de tracking inválido');
+  });
+
+  it('rótulos provados viajam no token; tokens sem eles mantêm o formato anterior', () => {
+    const base: TrackingElement = { owner: 'o', funcionalidade: 'f', tela: 't', click: { id: 'menu', event: 'click', elemento: 'botao', rotulo: 'abrir' } };
+    expect(decodeTrackingToken(encodeTrackingToken({ ...base, rotulos: ['salas-vip', 'welcome-home'] }))?.rotulos).toEqual(['salas-vip', 'welcome-home']);
+    expect(decodeTrackingToken(encodeTrackingToken(base))).toEqual(base);
   });
 
   it('nega expansão excessiva de um token altamente comprimível', () => {
