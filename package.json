@@ -17,7 +17,7 @@
     }
   },
   "bin": {
-    "auto-tracking": "./dist/cli/index.js"
+    "auto-tracking": "dist/cli/index.js"
   },
   "files": [
     "dist",
