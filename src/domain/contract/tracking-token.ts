@@ -14,7 +14,7 @@ export type Packed = [string, string, string, string | 0,
   [string, string, string, string, string | 0, string | 0] | 0,
   [string, string, string, string, string][] | 0,
   [string, string, string, string, string][] | 0,
-  string[]?];
+  (string[] | 0)?, string[]?];
 
 const nonBlank = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
 const safeText = (value: unknown): value is string => typeof value === 'string' && value.length <= 2048;
@@ -29,13 +29,17 @@ export function pack(contract: TrackingElement): Packed {
       contract.click.rotulo, contract.click.opcaoPermitida ?? 0, contract.click.opcaoFonte ?? 0] : 0,
     contract.outputs?.map(({ id, event, selector, label, output }) => [id, event, selector, label, output]) ?? 0,
     contract.overlayOutputs?.map(({ id, event, selector, label, output }) => [id, event, selector, label, output]) ?? 0,
-    // Slot opcional: tokens sem rótulos provados mantêm o formato de 7 posições.
-    ...(contract.rotulos?.length ? [[...contract.rotulos]] : [])] as Packed;
+    // Slots opcionais: tokens sem rótulos provados nem rótulo dinâmico mantêm o formato de 7 posições.
+    ...(contract.rotuloDinamico?.length ? [contract.rotulos?.length ? [...contract.rotulos] : 0, [...contract.rotuloDinamico]]
+      : contract.rotulos?.length ? [[...contract.rotulos]] : [])] as Packed;
 }
 
 export function unpack(value: unknown): TrackingElement | null {
-  if (!Array.isArray(value) || (value.length !== 7 && value.length !== 8)) return null;
-  const [owner, funcionalidade, tela, screenId, click, outputs, overlayOutputs, rotulos] = value;
+  if (!Array.isArray(value) || value.length < 7 || value.length > 9) return null;
+  const [owner, funcionalidade, tela, screenId, click, outputs, overlayOutputs, rawRotulos, dinamico] = value;
+  if (value.length === 9 && (!Array.isArray(dinamico) || dinamico.length === 0 || dinamico.length > MAX_OUTPUTS
+    || !dinamico.every(nonBlank))) return null;
+  const rotulos = value.length === 9 && rawRotulos === 0 ? undefined : rawRotulos;
   if (rotulos !== undefined && (!Array.isArray(rotulos) || rotulos.length === 0 || rotulos.length > MAX_OUTPUTS
     || !rotulos.every(nonBlank))) return null;
   if (!nonBlank(owner) || !nonBlank(funcionalidade) || !nonBlank(tela)) return null;
@@ -56,6 +60,7 @@ export function unpack(value: unknown): TrackingElement | null {
     ...(outputs ? { outputs: toBindings(outputs) } : {}),
     ...(overlayOutputs ? { overlayOutputs: toBindings(overlayOutputs) } : {}),
     ...(rotulos ? { rotulos: rotulos as string[] } : {}),
+    ...(value.length === 9 ? { rotuloDinamico: dinamico as string[] } : {}),
   };
 }
 

@@ -5,8 +5,17 @@ export const BACKWARD_ACTION = /\b(voltar|anterior|retornar|back|previous)/;
 /** Palavras de código (prefixos de teste, verbos de evento) que não descrevem a ação no rótulo. */
 export const TECHNICAL_LABEL_WORDS: ReadonlySet<string> = new Set([
   'btn', 'button', 'icon', 'ico', 'img', 'lnk', 'lbl', 'txt', 'chk', 'inp', 'testid', 'test', 'e2e',
-  'on', 'handle', 'handler', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
+  'on', 'ao', 'handle', 'handler', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
 ]);
+
+/**
+ * Expressão de rótulo dinâmico com indício de dado pessoal ou variável de negócio:
+ * o texto visível não é enviado e o rótulo semântico da ação é usado.
+ */
+export const PERSONAL_DATA_EXPRESSION = /(?:^|-)(?:nome|name|cpf|cnpj|rg|email|mail|telefone|celular|phone|fone|endereco|address|logradouro|cep|bairro|cidade|cartao|carteirinha|numero|number|matricula|beneficiario|titular|dependente|usuario|user|paciente|segurado|senha|password|token|protocolo|nascimento|idade|valor|saldo|preco|data|date|documento|placa|conta|agencia)(?:-|$)/;
+
+/** Output de navegação do próprio componente (voltar/fechar do header/modal). */
+export const COMPONENT_NAVIGATION_OUTPUT = /(?:^|-)(?:back|voltar|retornar|close|fechar|dismiss|cancel|cancelar)(?:-|$)/;
 
 /** Valor de atributo com forma de identificador (data-testid, id de teste), não de texto exibido. */
 export const looksLikeIdentifier = (value: string): boolean => {

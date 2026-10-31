@@ -139,6 +139,24 @@ describe('runtime: emissão no formato do Builder do time', () => {
     expect(JSON.stringify(fed)).not.toMatch(/maria/i);
   });
 
+  it('rótulo dinâmico: envia o texto atual no clique, sem badge, e bloqueia dado pessoal', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const page = document.querySelector('app-tipo')!;
+    const token = encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'opcoes-reembolso',
+      outputs: [{ id: 'opcoes-reembolso-bsds', event: 'click', selector: ':host', label: 'botao', output: 'bsdsClick' }], rotuloDinamico: ['opcoes-reembolso-bsds'] });
+    page.insertAdjacentHTML('beforeend', `<bsds-service-button id="dyn" data-at-ref="${token}"><span>Orientação do reembolso</span><bsds-badge slot="top">Novo</bsds-badge></bsds-service-button>`);
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    const button = document.querySelector('#dyn')!;
+    click('#dyn span');
+    button.querySelector('span')!.textContent = 'Solicitar reembolso';
+    click('#dyn span');
+    button.querySelector('span')!.textContent = 'Cartão 1234 5678 9012';
+    click('#dyn span');
+    await flush();
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['orientacao-do-reembolso', 'solicitar-reembolso', 'botao']);
+    expect(JSON.stringify(fed)).not.toMatch(/1234|novo/);
+  });
+
   it('modo ref: opção ambígua não é inventada', async () => {
     stops.forEach((stop) => stop()); stops = [];
     const star = document.getElementById('fedBtn')!;

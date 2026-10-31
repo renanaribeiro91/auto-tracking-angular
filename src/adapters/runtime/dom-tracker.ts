@@ -265,7 +265,10 @@ export class DomEventTracker {
     // Nunca usar todo o conteúdo do formulário como rótulo da submissão.
     const labelSource = event.type === 'submit' ? submitter : hit.labelSource;
     const proven = DomEventTracker.provenLabel(hit);
-    const label = proven || slug(hit.fallbackLabel) || (labelSource ? slug(DomEventTracker.visibleLabel(labelSource)) : '') || slug(hit.id);
+    // Rótulo dinâmico comprovado pelo CLI: o texto atual vence o fallback gravado no build.
+    const dynamic = (hit.descriptor?.rotuloDinamico ?? hit.host.getAttribute('data-at-rotulo-dinamico')?.split('|'))?.includes(hit.id) ?? false;
+    const current = dynamic && labelSource ? DomEventTracker.currentLabel(labelSource) : '';
+    const label = proven || current || slug(hit.fallbackLabel) || (labelSource ? slug(DomEventTracker.visibleLabel(labelSource)) : '') || slug(hit.id);
     const candidate = hit.host.getAttribute('data-at-option');
     const allowed = hit.descriptor?.click?.opcaoPermitida ?? hit.host.getAttribute('data-at-option-allowed');
     // shortcut: marcadores legados não têm lista de valores; regerar tracking aplica a validação.
@@ -368,6 +371,28 @@ export class DomEventTracker {
 
   private static elementsOf(event: Event): Element[] {
     return event.composedPath().filter(this.isElement);
+  }
+
+  /**
+   * Texto exibido no momento do clique: atributo acessível ou primeiro texto, sem
+   * slots nomeados (badge, ícone) nem conteúdo oculto. Número longo (CPF, cartão,
+   * protocolo) ou e-mail nunca é enviado: devolve vazio e o fallback semântico vale.
+   */
+  private static currentLabel(element: Element): string {
+    let text = ['aria-label', 'label', 'title'].map((name) => element.getAttribute(name)).find((value) => !!value?.trim()) ?? '';
+    if (!text) {
+      const decorative = (node: Node): boolean => {
+        for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
+          if (parent.hasAttribute('slot') || parent.getAttribute('aria-hidden') === 'true' || parent.localName === 'script' || parent.localName === 'style') return true;
+        }
+        return false;
+      };
+      // O primeiro texto é o título do elemento; descrições e itens seguintes não identificam o gesto.
+      const walker = element.ownerDocument.createTreeWalker(element, 4 /* SHOW_TEXT */,
+        { acceptNode: (node) => decorative(node) || !node.nodeValue?.trim() ? 3 /* FILTER_SKIP */ : 1 /* FILTER_ACCEPT */ });
+      text = walker.nextNode()?.nodeValue?.trim() ?? '';
+    }
+    return /@|\d(?:[.\-\/ ]?\d){5,}/.test(text) ? '' : labelSlug(text);
   }
 
   private static visibleLabel(element: Element): string {

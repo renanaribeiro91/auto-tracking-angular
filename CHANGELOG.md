@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 — 2026-10-31
+
+### Rótulo correto para texto dinâmico e ações de navegação
+
+- Texto visível vindo de interpolação ou de `[label]`/`[title]`/`[aria-label]` ligado a variável (menu do serviço, nome que muda sem novo build) é lido no clique. O token marca `rotuloDinamico` e mantém o rótulo semântico da ação como fallback. Na planilha o rótulo aparece como `[texto-exibido-no-elemento]`.
+- Leitura no clique, sem observer: atributo acessível atual ou o primeiro texto do elemento, ignorando slots nomeados (badge, ícone) e conteúdo `aria-hidden`. Número longo (CPF, cartão, protocolo) ou e-mail nunca é enviado; vale o fallback.
+- Expressões com indício de dado pessoal ou de negócio (`nome`, `cpf`, `endereco`, `cartao`, `valor`, `data`…) nunca são lidas do DOM.
+- Prefixo da biblioteca do componente (`bsdsClick` em `<bsds-…>`) nunca vira rótulo.
+- Voltar/fechar/cancelar de header e modal usam a ação, nunca o título da tela.
+- `data-testid` concatenado (`'icon-star-ranking-' + index`) usa a parte fixa; o conectivo `ao` do handler não entra no rótulo.
+- Compatível: tokens existentes continuam válidos; só elementos de rótulo dinâmico ganham o slot opcional novo. Regere com `npx auto-tracking` após atualizar.
+
 ## 2.0.0 — 2026-10-30
 
 ### Eventos coerentes com a planilha e sem `(not set)`

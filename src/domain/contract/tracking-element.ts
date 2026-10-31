@@ -20,4 +20,10 @@ export interface TrackingElement {
   readonly overlayOutputs?: readonly OutputBinding[];
   /** Rótulos literais provados no código (item de lista estática); o visível só é enviado se estiver aqui. */
   readonly rotulos?: readonly string[];
+  /**
+   * IDs dos gestos cujo texto visível vem de interpolação sem indício de dado pessoal
+   * (ex.: menu do serviço). O runtime lê o texto atual no clique só nesses gestos;
+   * `rotulo`/`label` ficam como fallback. Voltar/fechar do componente nunca entram.
+   */
+  readonly rotuloDinamico?: readonly string[];
 }

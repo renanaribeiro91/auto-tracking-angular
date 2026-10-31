@@ -123,7 +123,10 @@ describe('tagger: toda interação declarada no template', () => {
       expect(block.entries[0]!.rotulos).toEqual(['saude-em-equilibrio', 'salas-vip']);
       expect(block.html).toContain('data-at-rotulos="saude-em-equilibrio|salas-vip"');
       const external = tagTemplate('<x-botao *ngFor="let b of externos" [title]="b.titulo" (click)="abrir(b)"></x-botao>', ctx({ listLabels }));
-      expect(external.entries[0]).toMatchObject({ rotulo: 'abrir' });
+      // Lista não provável: o texto é lido no clique; 'abrir' segue como fallback do contrato.
+      expect(external.entries[0]).toMatchObject({ rotulo: '[texto-exibido-no-elemento]' });
+      expect(external.html).toContain('data-at-rotulo="abrir"');
+      expect(external.html).toMatch(/data-at-rotulo-dinamico="[^"|]+"/);
       expect(external.entries[0]!.rotulos).toBeUndefined();
     });
   });
@@ -550,5 +553,78 @@ describe('tagger: toda interação declarada no template', () => {
     expect(second.html).toBe(first.html);
     expect(second.entries).toEqual(first.entries);
     expect(first.entries.filter((e) => e.evento === 'click').map((e) => e.id)).toEqual(['reembolso-tipo-documento-voltar', 'reembolso-tipo-documento-a', 'reembolso-tipo-documento-a-2']);
+  });
+});
+
+describe('tagger: rótulo de texto dinâmico', () => {
+  const serviceButton = def({
+    selectors: ['bsds-service-button'],
+    outputs: new Map([['bsdsClick', 'bsdsClick']]),
+    hostListeners: [{ event: 'click', expr: 'onHost()' }],
+    methods: new Map([['onHost', 'this.bsdsClick.emit();']]),
+  });
+  const dsCatalog: ComponentCatalog = { get: (tag) => (tag === 'bsds-service-button' ? serviceButton : undefined) };
+  const refCtx = () => ctx({ mode: 'ref', catalog: dsCatalog });
+  const tokenOf = (html: string) => decodeTrackingToken(/data-at-ref="([^"]+)"/.exec(html)![1]!)!;
+
+  it('texto vindo de dado do serviço é lido no clique e nunca vira nome técnico do componente', () => {
+    const result = tagTemplate(`<bsds-service-button (bsdsClick)="onBtnClick(btn, vm)">{{ btn.label }}<bsds-badge slot="top">{{ btn.badge.label }}</bsds-badge></bsds-service-button>`, refCtx());
+    const token = tokenOf(result.html);
+    expect(token.rotuloDinamico).toEqual([token.outputs![0]!.id]);
+    expect(token.outputs![0]!.label).not.toMatch(/bsds/);
+    expect(result.entries.find((entry) => entry.evento === 'click')!.rotulo).toBe('[texto-exibido-no-elemento]');
+  });
+
+  it('expressão com indício de dado pessoal mantém o rótulo semântico e não lê o DOM', () => {
+    const result = tagTemplate(`<bsds-service-button (bsdsClick)="selecionarBeneficiario(b)">{{ b.nome }}</bsds-service-button>`, refCtx());
+    const token = tokenOf(result.html);
+    expect(token.rotuloDinamico).toBeUndefined();
+    expect(token.outputs![0]!.label).toBe('selecionar-beneficiario');
+  });
+
+  it('texto estático continua no contrato e o token não muda de formato', () => {
+    const result = tagTemplate(`<bsds-service-button (bsdsClick)="abrir()">Orientação do reembolso</bsds-service-button>`, refCtx());
+    const token = tokenOf(result.html);
+    expect(token.rotuloDinamico).toBeUndefined();
+    expect(token.outputs![0]!.label).toBe('orientacao-do-reembolso');
+  });
+});
+
+describe('tagger: rótulo pertence ao gesto, não ao componente', () => {
+  it('voltar do header usa a ação, nunca o título da tela', () => {
+    const result = tagTemplate(`<lib-header title="Alterar dados de contato" (voltar)="voltar()"></lib-header>`, ctx({ mode: 'ref' }));
+    const token = decodeTrackingToken(/data-at-ref="([^"]+)"/.exec(result.html)![1]!)!;
+    expect(token.outputs![0]!.label).toBe('voltar');
+  });
+
+  it('handler sem nome usa a parte fixa do data-testid concatenado', () => {
+    const result = tagTemplate(`<ion-icon name="star" [attr.data-testid]="'icon-star-ranking-' + index" (click)="onCliked()"></ion-icon>`, ctx());
+    expect(result.entries[0]).toMatchObject({ rotulo: 'star-ranking' });
+  });
+
+  it('conectivo "ao" do handler não entra no rótulo', () => {
+    const result = tagTemplate(`<ion-button (click)="aoClicarVoltarPaginaAnterior()"><ion-icon name="arrow-back"></ion-icon></ion-button>`, ctx());
+    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar-pagina-anterior' });
+  });
+});
+
+describe('tagger: título do host como rótulo', () => {
+  const dsButton = def({ selectors: ['bsad-button'], outputs: new Map([['onClick', 'onClick']]), template: '<button (click)="onClick.emit()"></button>' });
+  const dsHeader = def({ selectors: ['bsds-header'], outputs: new Map([['bsdsBackButtonClick', 'bsdsBackButtonClick']]), hostListeners: [{ event: 'click', expr: 'onHost()' }], methods: new Map([['onHost', 'this.bsdsBackButtonClick.emit();']]) });
+  const cat: ComponentCatalog = { get: (tag) => [dsButton, dsHeader].find((d) => d.selectors.includes(tag)) };
+  it('botão de biblioteca com title disparado pelo <button> interno mantém o title', () => {
+    const result = tagTemplate(`<bsad-button title="Confirmar" (onClick)="confirmarAgendamento()"></bsad-button>`, ctx({ catalog: cat }));
+    expect(result.entries[0]).toMatchObject({ rotulo: 'confirmar' });
+  });
+  it('voltar do bsds-header não usa o título projetado', () => {
+    const result = tagTemplate(`<bsds-header (bsdsBackButtonClick)="voltarPaginaAnterior()"><h1>Vacinas</h1></bsds-header>`, ctx({ catalog: cat }));
+    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar-pagina-anterior' });
+  });
+
+  it('título dinâmico do header nunca vira rótulo do voltar, nem no clique', () => {
+    const result = tagTemplate(`<bsds-header (bsdsBackButtonClick)="voltar()"><h1>{{ titulo }}</h1></bsds-header>`, ctx({ catalog: cat, mode: 'ref' }));
+    const token = decodeTrackingToken(/data-at-ref="([^"]+)"/.exec(result.html)![1]!)!;
+    expect(token.rotuloDinamico).toBeUndefined();
+    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar' });
   });
 });
