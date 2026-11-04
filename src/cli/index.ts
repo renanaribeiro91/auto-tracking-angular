@@ -197,7 +197,10 @@ class AutoTrackingCli {
     }
   }
 
-  private async run(command: 'apply' | 'verify', root: string, configFile: string, dryRun: boolean): Promise<Report> {
+  private async run(
+    command: 'apply' | 'verify', root: string, configFile: string, dryRun: boolean,
+    beforeApply?: (changes: readonly PlannedChange[]) => readonly string[],
+  ): Promise<Report> {
     const config = this.configReader.readTrackingConfigStatically(configFile);
     if (!config) throw new Error(`config não encontrada ou sem runtime.owner/product: ${path.relative(root, configFile) || configFile}`);
     const paths = this.outputPathResolver.resolve(root, config.output);
@@ -206,20 +209,27 @@ class AutoTrackingCli {
     // Carrega o motor somente após validar a configuração e os caminhos de saída.
     const { TrackingPipelineFactory } = await import('./tracking-pipeline-composition.js');
     const pipeline = new TrackingPipelineFactory().create();
-    const implementation = this.implementationFingerprint();
-    const fingerprint = this.fingerprint(pipeline, root, configFile, implementation);
-
-    const { EvidenceWorkbookWriter } = await import('../adapters/reports/evidence-writer.js');
-    const workbook = new EvidenceWorkbookWriter();
     const result = pipeline.runPipeline(root, configFile);
     const summary = pipeline.summarize(result);
+    const status = result.diagnostics.some((d) => BLOCKING_DIAGNOSTIC_CODES.has(d.code)) ? 'incomplete' : 'valid';
+    if (command === 'verify') return this.verificationReport(root, paths, result, summary, status);
+    const conflicts = !dryRun ? beforeApply?.(result.changes) ?? [] : [];
+    if (conflicts.length) return {
+      command, status: 'incomplete', summary, cache: false,
+      planilha: path.relative(root, paths.excelFile), pendencias: conflicts,
+      diagnosticos: result.diagnostics,
+    };
+
+    const implementation = this.implementationFingerprint();
+    const fingerprint = this.fingerprint(pipeline, root, configFile, implementation);
+    const { EvidenceWorkbookWriter } = await import('../adapters/reports/evidence-writer.js');
+    const workbook = new EvidenceWorkbookWriter();
     const branding = this.resolveBranding(root, config);
     // A evidência Excel depende do contrato e do layout, não do código do
     // runtime/DOM. Corrigir um listener não deve regravar a planilha idêntica.
     const signature = workbook.workbookSignature(result.relatorio, branding);
     const reportChanged = this.fileContent(paths.relatorioFile) !== result.relatorio;
     const workbookChanged = (await workbook.readWorkbookSignature(paths.excelFile)) !== signature;
-    const status = result.diagnostics.some((d) => BLOCKING_DIAGNOSTIC_CODES.has(d.code)) ? 'incomplete' : 'valid';
     // O cache reutiliza artefatos, nunca substitui a prova sobre o código e os
     // pacotes atualmente instalados (inclusive dependências locais sem lock novo).
     if (result.changes.length === 0 && !reportChanged && !workbookChanged) {
@@ -227,12 +237,6 @@ class AutoTrackingCli {
       if (cachedReport) return { ...cachedReport, status, summary, diagnosticos: result.diagnostics };
     }
 
-    if (command === 'verify') {
-      // A evidência só está íntegra quando o fingerprint também corresponde
-      // às fontes, dependências e implementação atual, mesmo sem novos tokens.
-      const cacheValid = this.cachedReport('verify', root, paths, fingerprint, false) !== null;
-      return this.verificationReport(root, paths, result, summary, status, reportChanged, workbookChanged, !cacheValid);
-    }
     return this.applyReport(root, config, configFile, paths, result, summary, status, branding, signature, reportChanged, workbookChanged, dryRun, pipeline, workbook);
   }
 
@@ -282,16 +286,8 @@ class AutoTrackingCli {
     result: PipelineResult,
     summary: Summary,
     status: Report['status'],
-    reportChanged: boolean,
-    workbookChanged: boolean,
-    cacheInvalid: boolean,
   ): Report {
-    const pending = [
-      ...result.changes.map((change) => `marcação pendente: ${path.relative(root, change.file)}`),
-      ...(reportChanged ? ['relatorio.json desatualizado'] : []),
-      ...(workbookChanged ? ['evidencia-tagueamento.xlsx ausente ou desatualizada'] : []),
-      ...(cacheInvalid ? ['cache/estado.json desatualizado ou inválido'] : []),
-    ];
+    const pending = result.changes.map((change) => `marcação pendente: ${path.relative(root, change.file)}`);
     return {
       command: 'verify',
       status: pending.length === 0 ? status : 'incomplete',
@@ -437,10 +433,9 @@ class AutoTrackingCli {
 
     if (hook === 'pre-push') {
       const report = await this.run('verify', root, configFile, false);
-      const outputDir = path.dirname(path.resolve(root, report.planilha));
-      const uncommitted = repository.uncommitted(outputDir);
+      const uncommitted = repository.uncommittedTrackingInputs();
       if (report.status === 'valid' && uncommitted.length === 0) return CLI_EXIT_CODES.valid;
-      for (const issue of [...(report.pendencias ?? []), ...uncommitted.map((entry) => `não commitado: ${entry.slice(3)}`)]) log(issue);
+      for (const issue of [...(report.pendencias ?? []), ...uncommitted.map((file) => `fonte não commitada: ${file}`)]) log(issue);
       for (const diagnostic of report.diagnosticos ?? []) {
         if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
       }
@@ -449,28 +444,29 @@ class AutoTrackingCli {
     }
 
     const unstagedBefore = repository.unstagedFiles();
-    const report = await this.run('apply', root, configFile, false);
+    const untrackedBefore = repository.untrackedFiles();
+    const partial = repository.partiallyStagedTrackingInputs(unstagedBefore);
+    if (partial.length) {
+      for (const file of partial) log(`alterações parcialmente preparadas: ${file}`);
+      log('commit bloqueado: prepare a versão completa dos arquivos listados antes de executar o tagueamento automático.');
+      return CLI_EXIT_CODES.incomplete;
+    }
+    const report = await this.run('apply', root, configFile, false, (changes) => changes
+      .map((change) => repository.relative(change.file))
+      .filter((file) => unstagedBefore.has(file) || untrackedBefore.has(file))
+      .map((file) => `alterações não preparadas: ${file}`));
     const written = (report.written ?? []).map((file) => repository.relative(path.resolve(root, file)));
     if (report.status !== 'valid') {
+      for (const issue of report.pendencias ?? []) log(issue);
       for (const diagnostic of report.diagnosticos ?? []) {
         if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
       }
       log('commit bloqueado: tagueamento incompleto (detalhes acima).');
       return CLI_EXIT_CODES.incomplete;
     }
-    // Template com edição não preparada: incluir a marcação levaria junto a
-    // edição pela metade do desenvolvedor. A marcação já está gravada nele.
-    // Relatório, planilha e cache são inteiramente gerados pela lib: sempre entram.
+    // Artefatos gerados permanecem locais; apenas fontes alteradas entram no commit.
     const outputDir = `${repository.relative(path.dirname(path.resolve(root, report.planilha)))}/`;
-    const conflicts = written.filter((file) => unstagedBefore.has(file) && !file.startsWith(outputDir));
-    if (conflicts.length) {
-      for (const file of conflicts) log(`marcação atualizada em arquivo com alterações não preparadas: ${file}`);
-      log('commit bloqueado: revise esses arquivos, rode git add e repita o commit.');
-      return CLI_EXIT_CODES.incomplete;
-    }
-    // A pasta de saída é da lib: inclui também o que uma execução manual anterior gerou.
-    const generated = repository.uncommitted(path.resolve(repository.root, outputDir)).map((entry) => entry.slice(3));
-    const toStage = repository.trackable([...new Set([...written, ...generated])]);
+    const toStage = repository.trackable(written.filter((file) => !file.startsWith(outputDir)));
     repository.stage(toStage);
     if (toStage.length) log(`${toStage.length} arquivo(s) de tagueamento atualizados e incluídos neste commit.`);
     return CLI_EXIT_CODES.valid;

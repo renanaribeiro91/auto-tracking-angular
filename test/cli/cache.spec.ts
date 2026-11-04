@@ -66,7 +66,7 @@ describe('CLI: cache conserva prova e status', () => {
       ctimeMs: fs.statSync(file).ctimeMs,
     }));
     expect(cli()).toMatchObject({ status: 'valid', exit: 0, arquivosEscritos: 0, cache: 'hit' });
-    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [], cache: 'hit' });
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [] });
     files.forEach((file, index) => {
       const stat = fs.statSync(file);
       expect(fs.readFileSync(file).equals(before[index]!.bytes)).toBe(true);
@@ -172,7 +172,7 @@ describe('CLI: cache conserva prova e status', () => {
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
   });
 
-  it('cache com fingerprint divergente deve falhar no verify, ser recomposto sem mudar tokens e voltar a validar', () => {
+  it('cache com fingerprint divergente não interfere no verify das fontes; apply recompõe o estado', () => {
     write('src/app.html', '<button (click)="salvar()">Salvar</button>');
     expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
     const file = path.join(root, 'src/app.html');
@@ -182,8 +182,7 @@ describe('CLI: cache conserva prova e status', () => {
     state.fingerprint = 'fingerprint-forcado-invalido';
     fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
     const invalid = cli('verify');
-    expect(invalid).toMatchObject({ status: 'incomplete', exit: 1 });
-    expect(invalid.pendencias).toEqual(expect.arrayContaining([expect.stringContaining('cache')]));
+    expect(invalid).toMatchObject({ status: 'valid', exit: 0, pendencias: [] });
     expect(cli()).toMatchObject({ status: 'valid', exit: 0, arquivosEscritos: 1 });
     expect(fs.readFileSync(file, 'utf8')).toBe(html);
     expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [] });
@@ -215,7 +214,7 @@ describe('CLI: cache conserva prova e status', () => {
     const report = fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8');
     const template = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
     fs.rmSync(output, { recursive: true, force: true });
-    expect(cli('verify').status).toBe('incomplete');
+    expect(cli('verify').status).toBe('valid');
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 3 });
     expect(fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8')).toBe(report);
     expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(template);

@@ -9,6 +9,7 @@ export const GIT_HOOK_NAMES: readonly GitHookName[] = ['pre-commit', 'pre-push']
 
 const BLOCK_START = '# >>> auto-tracking';
 const BLOCK_END = '# <<< auto-tracking';
+const TRACKING_INPUT_PATTERN = /\.(?:html|ts)$|(?:^|\/)(?:angular\.json|package(?:-lock)?\.json|tsconfig[^/]*\.json)$/;
 
 const HOOK_DESCRIPTION: Readonly<Record<GitHookName, string>> = {
   'pre-commit': 'Atualiza o tagueamento e inclui no próprio commit o que mudou.',
@@ -81,8 +82,8 @@ export function upsertHookBlock(existing: string | null, hook: GitHookName, proj
 
 /** O que cada hook faz, exibido por `auto-tracking hooks status`. */
 export const GIT_HOOK_PURPOSE: Readonly<Record<GitHookName, string>> = {
-  'pre-commit': 'atualiza o tagueamento; se algo mudou, inclui no próprio commit (templates escritos agora + relatório, planilha e cache)',
-  'pre-push': 'só verifica; bloqueia o push se houver tagueamento pendente ou artefato não commitado',
+  'pre-commit': 'atualiza o tagueamento e inclui no próprio commit apenas as fontes alteradas; evidências e cache ficam locais',
+  'pre-push': 'verifica os templates sem depender de cache e bloqueia fontes locais ainda não commitadas',
 };
 
 export type HookState = 'instalado' | 'desatualizado' | 'ausente';
@@ -107,6 +108,23 @@ export class GitRepository {
   /** Arquivos com alterações no working tree ainda não preparadas para commit. */
   unstagedFiles(): Set<string> {
     return new Set(this.git(['diff', '--name-only', '-z']).split('\0').filter(Boolean));
+  }
+
+  /** Um commit parcial pode levar um template diferente daquele analisado no disco. */
+  partiallyStagedTrackingInputs(unstaged: ReadonlySet<string>): string[] {
+    return this.git(['diff', '--cached', '--name-only', '-z']).split('\0').filter((file) =>
+      unstaged.has(file) && TRACKING_INPUT_PATTERN.test(file),
+    );
+  }
+
+  untrackedFiles(): Set<string> {
+    return new Set(this.git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean));
+  }
+
+  /** Fontes e configurações que podem alterar a derivação do tagueamento. */
+  uncommittedTrackingInputs(): string[] {
+    const tracked = this.git(['diff', '--no-renames', '--name-only', '-z', 'HEAD']).split('\0');
+    return [...new Set([...tracked, ...this.untrackedFiles()])].filter((file) => TRACKING_INPUT_PATTERN.test(file));
   }
 
   /** Caminho relativo à raiz git, no formato que o próprio git reporta. */

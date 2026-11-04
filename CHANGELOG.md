@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.1 — 2026-11-04
+
+- `verify` e `pre-push` analisam o código atual sem depender de relatório, planilha ou cache anteriores; o push bloqueia fontes relevantes ainda não commitadas, incluindo templates novos.
+- `pre-commit` continua aplicando e preparando automaticamente o tagueamento no mesmo commit, protegendo o índice e os arquivos locais contra edições não preparadas ou parcialmente preparadas.
+- Consumidores podem ignorar `.auto-tracking/` por completo, mantendo planilha, JSON e cache locais sem conflito entre desenvolvedores.
+
 ## 2.1.0 — 2026-10-31
 
 ### Rótulo correto para texto dinâmico e ações de navegação

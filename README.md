@@ -23,7 +23,7 @@ Isso não equivale a certificar o comportamento de todo componente externo. Even
 
 ## Instalação e desenvolvimento local
 
-Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `2.1.0` lê no clique o texto dinâmico seguro (menus do serviço) e nunca usa título de tela ou prefixo de componente como rótulo; a `2.0.0` passou a enviar o mesmo rótulo da planilha (sem `(not set)`), não importa pacotes do Capacitor no runtime e instala hooks git nativos (`auto-tracking hooks install`). Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
+Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `2.1.1` mantém cache, relatórios e planilhas locais sem afetar o `pre-commit` automático e valida fontes sem depender desses artefatos. A `2.1.0` lê no clique o texto dinâmico seguro (menus do serviço) e nunca usa título de tela ou prefixo de componente como rótulo; a `2.0.0` passou a enviar o mesmo rótulo da planilha (sem `(not set)`), não importa pacotes do Capacitor no runtime e instala hooks git nativos (`auto-tracking hooks install`). Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
 
 Na pasta da biblioteca:
 
