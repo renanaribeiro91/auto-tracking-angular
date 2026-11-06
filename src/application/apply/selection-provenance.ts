@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import ts from 'typescript';
 import type { ComponentInfo } from './ports/project-index.js';
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
@@ -88,6 +90,31 @@ export function staticListLabels(component: ComponentInfo): (list: string, prope
   let parsed = false;
   const unwrap = (node: ts.Expression): ts.Expression =>
     ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node;
+  const sources = new Map<string, ts.SourceFile | null>();
+  const sourceOf = (file: string): ts.SourceFile | null => {
+    if (!sources.has(file)) sources.set(file, fs.existsSync(file) ? ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true) : null);
+    return sources.get(file)!;
+  };
+  const resolve = (expression: ts.Expression, file: string, depth = 0): ts.Expression | null => {
+    const value = unwrap(expression);
+    if (!ts.isIdentifier(value)) return value;
+    if (depth > 4) return null;
+    const source = sourceOf(file);
+    for (const statement of source?.statements ?? []) {
+      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const)) {
+        const item = statement.declarationList.declarations.find((item) => ts.isIdentifier(item.name) && item.name.text === value.text);
+        if (item?.initializer) return resolve(item.initializer, file, depth + 1);
+      }
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith('.')) continue;
+      const bindings = statement.importClause?.namedBindings;
+      const imported = bindings && ts.isNamedImports(bindings) ? bindings.elements.find((item) => item.name.text === value.text) : null;
+      if (!imported) continue;
+      const base = path.resolve(path.dirname(file), statement.moduleSpecifier.text.replace(/\.js$/, ''));
+      const target = [base + '.ts', path.join(base, 'index.ts')].find((candidate) => fs.existsSync(candidate));
+      return target ? resolve(ts.factory.createIdentifier((imported.propertyName ?? imported.name).text), target, depth + 1) : null;
+    }
+    return null;
+  };
   return (list, property) => {
     if (!parsed) {
       parsed = true;
@@ -95,10 +122,19 @@ export function staticListLabels(component: ComponentInfo): (list: string, prope
     }
     const member = declaration?.members.find((item): item is ts.PropertyDeclaration =>
       ts.isPropertyDeclaration(item) && ts.isIdentifier(item.name) && item.name.text === list);
-    const initializer = member?.initializer && unwrap(member.initializer);
-    if (!initializer || !ts.isArrayLiteralExpression(initializer) || initializer.elements.length === 0) return null;
+    const assignments: ts.Expression[] = member?.initializer ? [member.initializer] : [];
+    const collect = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left)
+        && node.left.expression.kind === ts.SyntaxKind.ThisKeyword && node.left.name.text === list) assignments.push(node.right);
+      ts.forEachChild(node, collect);
+    };
+    if (declaration) collect(declaration);
+    const arrays = assignments.map((expression) => resolve(expression, component.tsFile));
+    if (!arrays.length || arrays.some((value) => !value || !ts.isArrayLiteralExpression(value))) return null;
+    const elements = arrays.flatMap((value) => [...(value as ts.ArrayLiteralExpression).elements]);
+    if (!elements.length) return null;
     const values: string[] = [];
-    for (const element of initializer.elements) {
+    for (const element of elements) {
       const item = unwrap(element as ts.Expression);
       if (!ts.isObjectLiteralExpression(item)) return null;
       const assignment = item.properties.find((entry): entry is ts.PropertyAssignment => ts.isPropertyAssignment(entry)
@@ -108,5 +144,44 @@ export function staticListLabels(component: ComponentInfo): (list: string, prope
       values.push(value.text);
     }
     return values;
+  };
+}
+
+/**
+ * Campos declarados no tipo do item de uma lista da classe (`lista: Item[]`),
+ * resolvido no próprio arquivo ou em import relativo. `null` sem prova do tipo.
+ */
+export function listItemFields(component: ComponentInfo): (list: string) => readonly string[] | null {
+  const fieldsOf = (source: ts.SourceFile, name: string): string[] | null => {
+    for (const statement of source.statements) {
+      const members = ts.isInterfaceDeclaration(statement) && statement.name.text === name ? statement.members
+        : ts.isTypeAliasDeclaration(statement) && statement.name.text === name && ts.isTypeLiteralNode(statement.type) ? statement.type.members
+          : null;
+      if (members) return members.filter(ts.isPropertySignature).map((member) => member.name.getText(source));
+    }
+    return null;
+  };
+  return (list) => {
+    const source = ts.createSourceFile('component.ts', component.classText, ts.ScriptTarget.Latest, true);
+    const member = source.statements.find(ts.isClassDeclaration)?.members.find((item): item is ts.PropertyDeclaration =>
+      ts.isPropertyDeclaration(item) && ts.isIdentifier(item.name) && item.name.text === list);
+    const type = member?.type;
+    const element = type && ts.isArrayTypeNode(type) ? type.elementType
+      : type && ts.isTypeReferenceNode(type) && ['Array', 'ReadonlyArray'].includes(type.typeName.getText(source)) ? type.typeArguments?.[0] : undefined;
+    if (!element || !ts.isTypeReferenceNode(element) || !ts.isIdentifier(element.typeName)) return null;
+    const name = element.typeName.text;
+    const local = fieldsOf(source, name);
+    if (local || !component.tsFile || !fs.existsSync(component.tsFile)) return local;
+    const file = ts.createSourceFile(component.tsFile, fs.readFileSync(component.tsFile, 'utf8'), ts.ScriptTarget.Latest, true);
+    for (const statement of file.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith('.')) continue;
+      const bindings = statement.importClause?.namedBindings;
+      const imported = bindings && ts.isNamedImports(bindings) ? bindings.elements.find((item) => item.name.text === name) : null;
+      if (!imported) continue;
+      const base = path.resolve(path.dirname(component.tsFile), statement.moduleSpecifier.text.replace(/\.js$/, ''));
+      const target = [base + '.ts', path.join(base, 'index.ts')].find((candidate) => fs.existsSync(candidate));
+      return target ? fieldsOf(ts.createSourceFile(target, fs.readFileSync(target, 'utf8'), ts.ScriptTarget.Latest, true), (imported.propertyName ?? imported.name).text) : null;
+    }
+    return local;
   };
 }

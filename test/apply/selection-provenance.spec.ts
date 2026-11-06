@@ -20,7 +20,7 @@ describe('proveniência de opções numéricas em componentes repetidos', () => 
     expect(ref).toMatch(/^v1\.[A-Za-z0-9_-]+$/);
     expect(result.html).not.toContain('data-at-option=');
     expect(result.html).not.toContain('data-at-option-allowed=');
-    expect(result.entries[0]?.opcao_selecionada_1).toBe('dinâmica (opção selecionada)');
+    expect(result.entries[0]?.opcao_selecionada_1).toBe('[valor-selecionado]');
     const descriptor = decodeTrackingToken(ref!);
     expect(descriptor?.click).toMatchObject({ opcaoFonte: 'aria-label-numero', opcaoPermitida: '1|2|3|4|5' });
     const second = tagTemplate(result.html, { ...ctx(methods), mode: 'ref' });

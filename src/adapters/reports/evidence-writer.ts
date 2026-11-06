@@ -1,19 +1,21 @@
 // T26 — planilha de evidência para o negócio: resumo + uma aba por módulo (funcionalidade), com a marca do preset
 import * as fs from 'fs';
 import { createHash } from 'crypto';
-import type { Cell as ExcelCell, Workbook, Worksheet } from 'exceljs';
+import type { Cell as ExcelCell, Workbook, Worksheet } from 'exceljs-hardened';
 import { EVIDENCE_WRITER_VERSION, WORKBOOK_COLORS } from './evidence-writer.constants.js';
 import { MODULE_WORKSHEET_COLUMNS, WORKBOOK_LAYOUT } from './evidence-writer.config.js';
 import type { EvidenceRow as Row, ModuleRow, WorkbookBranding, WorkbookInput } from './evidence-writer.types.js';
 import { createWorksheetBackground } from './watermark-background.js';
+import { loadWorkbookProvider } from './excel-workbook.js';
+import { inspectXlsx, readBoundedFile, readBrandingPng, XLSX_LIMITS } from './xlsx-safety.js';
+import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
 
 export type { WorkbookBranding, WorkbookInput } from './evidence-writer.types.js';
 
 /** Gera e verifica a planilha de evidência e controla sua identidade de cache. */
 export class EvidenceWorkbookWriter {
   private async excel() {
-    const module = await import('exceljs');
-    return (module as unknown as { default?: typeof module }).default ?? module;
+    return loadWorkbookProvider();
   }
 
   /** Assinatura do conteúdo da planilha: relatório, imagens de marca e versão do layout. */
@@ -21,7 +23,7 @@ export class EvidenceWorkbookWriter {
     const hash = createHash('sha256').update(EVIDENCE_WRITER_VERSION).update(implementation).update(report);
     hash.update(branding.primaryColor ?? '');
     for (const file of [branding.logoPng, branding.watermarkPng]) {
-      hash.update(file && fs.existsSync(file) ? fs.readFileSync(file) : '');
+      hash.update(file && fs.existsSync(file) ? readBrandingPng(file) : '');
     }
     return hash.digest('hex');
   }
@@ -31,10 +33,46 @@ export class EvidenceWorkbookWriter {
     if (!fs.existsSync(file)) return null;
     try {
       const workbook = new (await this.excel()).Workbook();
-      await workbook.xlsx.readFile(file);
+      await this.readWorkbook(workbook, file);
       return workbook.description || null;
     } catch {
       return null;
+    }
+  }
+
+  /** Verifica as células da evidência; a assinatura de metadados sozinha não prova seu conteúdo. */
+  async matchesEvidenceWorkbook(file: string, input: WorkbookInput, signature: string): Promise<boolean> {
+    if (!fs.existsSync(file)) return false;
+    try {
+      const ExcelJS = await this.excel();
+      const actual = new ExcelJS.Workbook();
+      await this.readWorkbook(actual, file);
+      if (actual.description !== signature) return false;
+      const expected = new ExcelJS.Workbook();
+      const rows = this.rowsOf(input);
+      const modules = [...new Set(rows.map((row) => row.modulo))].sort((a, b) => a.localeCompare(b));
+      const names = this.sheetNames(modules);
+      const color = input.branding.primaryColor ? `FF${input.branding.primaryColor.slice(1).toUpperCase()}` : WORKBOOK_COLORS.brand;
+      this.writeSummary(expected, input, rows, modules, names, null, color);
+      this.writeModuleSheets(expected, input, rows, modules, names, null, color);
+      const value = (cell: ExcelCell): unknown => {
+        const content = cell.value;
+        // ExcelJS lê links internos nativos como texto simples.
+        return content && typeof content === 'object' && 'hyperlink' in content ? content.text : content;
+      };
+      if (actual.worksheets.length !== expected.worksheets.length) return false;
+      for (const [index, sheet] of expected.worksheets.entries()) {
+        const candidate = actual.worksheets[index]!;
+        if (candidate.name !== sheet.name || candidate.rowCount !== sheet.rowCount || candidate.columnCount !== sheet.columnCount) return false;
+        for (let row = 1; row <= sheet.rowCount; row++) {
+          for (let column = 1; column <= sheet.columnCount; column++) {
+            if (JSON.stringify(value(candidate.getCell(row, column))) !== JSON.stringify(value(sheet.getCell(row, column)))) return false;
+          }
+        }
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -63,23 +101,39 @@ export class EvidenceWorkbookWriter {
     fs.writeFileSync(file, await this.internalLinks(buffer));
   }
 
+  private async readWorkbook(workbook: Workbook, file: string): Promise<void> {
+    const bytes = readBoundedFile(file, XLSX_LIMITS.compressedBytes);
+    await inspectXlsx(bytes);
+    await workbook.xlsx.load(bytes as unknown as ArrayBuffer, {
+      maxEntryUncompressedSize: XLSX_LIMITS.entryBytes,
+      maxTotalUncompressedSize: XLSX_LIMITS.expandedBytes,
+      maxMergeCells: 100_000, maxDataValidationCells: 100_000, maxDefinedNameCells: 100_000,
+    });
+  }
+
   private addImage(workbook: Workbook, file: string | undefined): number | null {
     if (!file || !fs.existsSync(file)) return null;
-    return workbook.addImage({ buffer: fs.readFileSync(file) as unknown as ArrayBuffer, extension: 'png' });
+    return workbook.addImage({ buffer: readBrandingPng(file) as unknown as ArrayBuffer, extension: 'png' });
   }
 
   private addBackground(workbook: Workbook, file: string | undefined): number | null {
     if (!file || !fs.existsSync(file)) return null;
-    const image = createWorksheetBackground(fs.readFileSync(file));
+    const image = createWorksheetBackground(readBrandingPng(file));
     return workbook.addImage({ buffer: image as unknown as ArrayBuffer, extension: 'png' });
   }
 
   private rowsOf(input: WorkbookInput): Row[] {
     const rows: Row[] = [];
     for (const entry of input.entries) {
-      for (const screenRef of entry.telas.filter((screen) => screen !== '*')) {
-        const [modulo, screenName] = screenRef.split(':') as [string, string];
-        const screen = `{ambiente}:${input.product}:${screenName}`;
+      if (!entry.telas.length || !entry.telas.every((screen) => screen === ORIGIN_SCREEN || screen === '*' || isStaticScreenReference(screen))) {
+        throw new Error(`interação '${entry.id}' sem vínculo de tela`);
+      }
+      const resolvedScreens = entry.telas.filter(isStaticScreenReference);
+      for (const screenRef of resolvedScreens.length ? resolvedScreens : [null]) {
+        const parts = screenRef?.split(':');
+        const modulo = parts?.[0] ?? entry.funcionalidade;
+        const screenName = parts?.[1] ?? '';
+        const screen = `{ambiente}:${input.product}:${screenRef ? screenName : '{tela-de-origem}'}`;
         rows.push({
           modulo,
           id: entry.id,
@@ -88,7 +142,7 @@ export class EvidenceWorkbookWriter {
           elemento: entry.elemento,
           tela: screen,
           categoria: entry.evento === 'click' ? screen : '',
-          rotulo: entry.rotulos?.length ? entry.rotulos.join(' | ') : entry.rotulo,
+          rotulo: entry.rotulos?.length ? `Um de: ${entry.rotulos.join('; ')}` : entry.rotulo,
           opcaoSelecionada: entry.opcao_selecionada_1 ?? '',
           origem: entry.origem,
           arquivo: entry.arquivo,

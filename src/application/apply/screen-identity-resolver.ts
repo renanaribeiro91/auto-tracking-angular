@@ -22,9 +22,16 @@ export class ScreenIdentityResolver {
     const container = parts.findIndex((part) => SCREEN_CONTAINERS.has(part));
     const floor = path.join(scanRoot, ...parts.slice(0, container + 1));
 
-    // O primeiro nível preserva a funcionalidade da rota/módulo. Somente
-    // colisões reais permitem refinar a identidade para níveis mais específicos.
-    if (refine === 0) {
+    // Colisões refinam apenas a page; nunca promovem sua pasta a funcionalidade.
+    if (refine !== 0) {
+      const base = this.resolve(scanRoot, template, 0, '', routed);
+      const moduleAt = parts.findIndex((part, index) => index > container && slug(part) === base.funcionalidade);
+      const qualified = [...parts.slice(moduleAt >= 0 ? moduleAt + 1 : container + 1)
+        .filter((part) => !GENERIC_SCREEN_DIRECTORIES.has(part.toLowerCase())), fileName]
+        .filter((part, index, list) => index === 0 || part !== list[index - 1]);
+      return { funcionalidade: base.funcionalidade, tela: refine === 3 ? tela : slug(qualified.join('-')) || tela };
+    }
+    {
       const moduleWithCommon = this.moduleWithCommonDirectory(telaDir, floor);
       if (moduleWithCommon) return { funcionalidade: slug(moduleWithCommon), tela };
       if (routed) {
@@ -33,6 +40,8 @@ export class ScreenIdentityResolver {
       }
     }
 
+    const feature = parts.slice(container + 1).find((part) => !GENERIC_SCREEN_DIRECTORIES.has(part.toLowerCase()));
+    if (container >= 0 && feature) return { funcionalidade: slug(feature), tela };
     const telaFolder = parts[parts.length - 1];
     const parent = [...parts.slice(0, -1)].reverse().find((part) => !GENERIC_SCREEN_DIRECTORIES.has(part.toLowerCase()));
     const modulo = parent && parts.indexOf(parent) > container ? parent : telaFolder && !GENERIC_SCREEN_DIRECTORIES.has(telaFolder.toLowerCase()) ? telaFolder : tela;

@@ -1,4 +1,17 @@
 import type { ComponentDef } from './component-catalog.js';
+import type { TrackingSurfaceDefinition } from '../../../domain/contract/tracking-surface.js';
+
+export interface SurfaceDeclaration {
+  readonly ownerKey?: string;
+  readonly method?: string;
+  readonly componentKey: string;
+  readonly file: string;
+  readonly line: number;
+  readonly text: string;
+  readonly refStart?: number;
+  readonly refEnd?: number;
+  readonly definition: TrackingSurfaceDefinition;
+}
 
 /** Trecho editável de um template inline e sua localização no arquivo TypeScript. */
 export interface InlineTemplate {
@@ -10,6 +23,9 @@ export interface InlineTemplate {
 
 /** Componente Angular normalizado para as regras de descoberta e marcação. */
 export interface ComponentInfo {
+  readonly baseClass?: string;
+  readonly initializers?: ReadonlySet<string>;
+  readonly methodComponents?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Identidade de declaração, distinta mesmo quando há classes homônimas. */
   readonly key: string;
   readonly className: string;
@@ -30,6 +46,8 @@ export interface ComponentInfo {
 }
 
 export interface ServiceInfo {
+  readonly baseClass?: string;
+  readonly initializers?: ReadonlySet<string>;
   readonly key: string;
   readonly className: string;
   readonly tsFile: string;
@@ -43,6 +61,12 @@ export interface ServiceInfo {
 
 /** Resultado da leitura estrutural do projeto Angular, independente do compilador usado. */
 export interface ProjectIndex {
+  readonly dynamicMethodValues?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly eagerServices?: ReadonlySet<string>;
+  /** Arquivos que importam a API pública, para reconciliação AST do contrato de integração. */
+  readonly trackingFiles?: readonly string[];
+  readonly surfaces?: readonly SurfaceDeclaration[];
+  readonly surfaceErrors?: readonly { readonly file: string; readonly line: number; readonly message: string }[];
   readonly components: readonly ComponentInfo[];
   /** Identidades de componentes usados em rotas, sem colisões por nome de classe. */
   readonly routedComponents: ReadonlySet<string>;
@@ -52,6 +76,8 @@ export interface ProjectIndex {
   readonly opens: ReadonlyMap<string, ReadonlySet<string>>;
   /** Identidade de declaração do serviço → contrato estático usado pelo resolver. */
   readonly services: ReadonlyMap<string, ServiceInfo>;
+  /** Alias de import TypeScript → identidade do módulo/action, para vincular effects sem colisões. */
+  readonly actionImports?: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** chamadas provideAutoTracking(<config>.runtime) encontradas (prova de ligação no bootstrap) */
   readonly providerCalls: number;
 }

@@ -1,6 +1,6 @@
 {
   "name": "auto-tracking-angular",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": false,
   "description": "Biblioteca Angular/Ionic para auto-tracking com análise causal, geração de tags e relatórios Excel/JSON",
   "type": "module",
@@ -72,10 +72,10 @@
     "typescript": "~5.8.3"
   },
   "dependencies": {
-    "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
     "pako": "2.1.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "exceljs-hardened": "5.1.0"
   },
   "typesVersions": {
     "*": {

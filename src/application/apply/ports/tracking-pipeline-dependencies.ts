@@ -5,7 +5,8 @@ import type { WorkspaceFileSystem } from './workspace-file-system.js';
 import type { TrackingProjectConfigReader } from './tracking-project-config.js';
 
 export interface TrackingProjectIndexer {
-  buildProjectIndex(scanRoot: string): ProjectIndex;
+  reconcileTrackingSource?(source: string, file: string): string;
+  buildProjectIndex(scanRoot: string, sources?: ReadonlyMap<string, string>): ProjectIndex;
 }
 
 export interface TrackingComponentCatalogBuilder {

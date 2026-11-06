@@ -1,8 +1,10 @@
 import { PNG } from 'pngjs';
+import { validatePng } from './xlsx-safety.js';
 
 /** Repetição sutil de uma marca fornecida pelo aplicativo, sem geometria de desenho
  * no arquivo XLSX. Usada somente como imagem de fundo nativa da planilha. */
 export function createWorksheetBackground(sourcePng: Buffer): Buffer {
+  validatePng(sourcePng);
   const source = PNG.sync.read(sourcePng);
   const { width, height, data } = source;
   let minX = width, minY = height, maxX = -1, maxY = -1, strongest = 0;

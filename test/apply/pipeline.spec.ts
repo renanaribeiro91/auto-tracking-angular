@@ -43,7 +43,7 @@ describe('pipeline apply/verify ponta a ponta', () => {
       { path: 'tipo', component: TipoPage }, { path: 'x', children: [] }];`);
     write(root, 'src/app/features/reembolso/tipo/tipo.page.ts', `@Component({ selector: 'app-tipo', templateUrl: './tipo.page.html' })
 export class TipoPage { abrir() { this.modal.create({ component: AjudaModal }); } }`);
-    write(root, 'src/app/features/reembolso/tipo/tipo.page.html', '<lib-header (voltar)="voltar()"></lib-header><app-card></app-card>');
+    write(root, 'src/app/features/reembolso/tipo/tipo.page.html', '<lib-header (voltar)="voltar()"></lib-header><app-card></app-card><button (click)="abrir()">Ajuda</button>');
     write(root, 'src/app/shared/components/card/card.component.ts', `@Component({ selector: 'app-card', template: "<button (click)=\\"ok()\\">Ok</button>" })
 export class CardComponent { ok() {} }`);
     write(root, 'src/app/shared/components/card/card.data.ts', `@Component({ selector: 'app-card', template: '' })
@@ -114,7 +114,7 @@ export class AjudaModal { fechar() {} }`);
     expect(template).toMatch(/data-at-ref="v1\.[A-Za-z0-9_-]+"/);
     const ref = /data-at-ref="([^"]+)"/.exec(template)![1]!;
     expect(decodeTrackingToken(ref)?.outputs).toEqual([
-      { id: 'reembolso-tipo-voltar', event: 'click', selector: '#btnVoltar', label: 'voltar', output: 'voltar' },
+      { id: 'reembolso-tipo-voltar', event: 'click', selector: '#btnVoltar', label: 'voltar', output: 'voltar', elemento: 'botao' },
     ]);
     expect(r.entries.find((e) => e.id === 'reembolso-tipo-voltar')?.ref).toBe(ref);
     expect((JSON.parse(fs.readFileSync(path.join(root, '.auto-tracking/relatorio.json'), 'utf8')) as { entries: Array<{ ref?: string }> }).entries.some((entry) => entry.ref === ref)).toBe(true);
@@ -128,16 +128,20 @@ export class AjudaModal { fechar() {} }`);
   });
 
   it('resolve a tela de componentes abertos por serviço→serviço, effect NgRx (alias de action diferente) e método privado; sem uso fica sem tela', () => {
-    write(root, 'src/app/features/reembolso/lista/lista.page.ts', `@Component({ selector: 'app-lista', templateUrl: './lista.page.html' })
+    write(root, 'src/app/shared/lista.actions.ts', 'export const abrirFiltro = () => ({});');
+    write(root, 'src/app/features/reembolso/lista/lista.page.ts', `import * as ListaActionsDaTela from '../../../shared/lista.actions';
+@Component({ selector: 'app-lista', templateUrl: './lista.page.html' })
 export class ListaPage { constructor(private useCase: ListaUseCase, private store: Store) {}
   ver() { this.useCase.verDetalhe(); }
   filtrar() { this.store.dispatch(ListaActionsDaTela.abrirFiltro()); } }`);
-    write(root, 'src/app/features/reembolso/lista/lista.page.html', '<ion-content></ion-content>');
+    write(root, 'src/app/features/reembolso/lista/lista.page.html', '<ion-content><button (click)="ver()">Detalhe</button><button (click)="filtrar()">Filtro</button></ion-content>');
+    write(root, 'src/app/effects-registration.ts', `import { FiltroEffects } from './shared/filtro.effects'; export const effects = provideEffects(FiltroEffects);`);
     write(root, 'src/app/features/reembolso/rotas-lista.ts', `export const r3 = [{ path: 'lista', component: ListaPage }];`);
     write(root, 'src/app/features/reembolso/lista/lista.use-case.ts', `export class ListaUseCase { constructor(private modais: ModaisService) {}
   verDetalhe() { return this.modais.abrirDetalhe(); } }`);
     write(root, 'src/app/shared/modais.service.ts', `export class ModaisService { abrirDetalhe() { return this.ctrl.create({ component: DetalheModal }); } }`);
-    write(root, 'src/app/shared/filtro.effects.ts', `export class FiltroEffects { constructor(private service: FiltroService) {}
+    write(root, 'src/app/shared/filtro.effects.ts', `import * as ListaActionsDoEffect from './lista.actions';
+export class FiltroEffects { constructor(private service: FiltroService) {}
   abrir$ = createEffect(() => this.actions$.pipe(ofType(ListaActionsDoEffect.abrirFiltro), switchMap(() => this.montar())));
   private montar() { return this.service.criarFiltro(); } }`);
     write(root, 'src/app/shared/filtro.service.ts', `export class FiltroService { criarFiltro() { return new Container(FiltroModal); } }`);
@@ -149,7 +153,7 @@ export class ${cls} { ok() {} }`);
     const telas = (f: string) => r.entries.find((e) => e.arquivo.endsWith(f))!.telas;
     expect(telas('detalhe.modal.ts')).toEqual(['reembolso:lista']);
     expect(telas('filtro.modal.ts')).toEqual(['reembolso:lista']);
-    expect(telas('sem-uso.modal.ts')).toEqual([]);
+    expect(r.entries.some((entry) => entry.arquivo.endsWith('sem-uso.modal.ts'))).toBe(false);
   });
 
   it('telas homônimas recebem identidade única (módulo pela pasta-mãe; nome pela pasta se preciso)', () => {
@@ -161,7 +165,7 @@ export class ${cls} { ok() {} }`);
     }
     const r = apply();
     const telas = r.entries.filter((e) => e.evento === 'screen_view' && e.arquivo.includes('servicos/')).map((e) => e.telas[0]).sort();
-    expect(telas).toEqual(['vacina:resumo', 'viagem:resumo']);
+    expect(telas).toEqual(['servicos:vacina-resumo', 'servicos:viagem-resumo']);
   });
 
   it('modo ref é autocontido, relatório contém ref por evento e a segunda execução é idempotente', () => {

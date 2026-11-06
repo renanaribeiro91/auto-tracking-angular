@@ -176,9 +176,16 @@ class AutoTrackingCli {
     const { logoPng, watermarkPng, primaryColor } = config.branding;
     if (!config.hasBranding) return null;
     if (primaryColor && !/^#[0-9a-f]{6}$/i.test(primaryColor)) throw new Error('branding.primaryColor deve usar o formato #RRGGBB');
+    const realRoot = fs.realpathSync(root);
     for (const file of [logoPng, watermarkPng]) {
       if (file && (!fs.existsSync(path.resolve(root, file)) || !fs.statSync(path.resolve(root, file)).isFile())) {
         throw new Error(`imagem de branding não encontrada: ${file}`);
+      }
+      if (file) {
+        const relative = path.relative(realRoot, fs.realpathSync(path.resolve(root, file)));
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          throw new Error('imagem de branding fora da raiz do consumidor');
+        }
       }
     }
     return {
@@ -200,6 +207,7 @@ class AutoTrackingCli {
   private async run(
     command: 'apply' | 'verify', root: string, configFile: string, dryRun: boolean,
     beforeApply?: (changes: readonly PlannedChange[]) => readonly string[],
+    verifyArtifacts = true,
   ): Promise<Report> {
     const config = this.configReader.readTrackingConfigStatically(configFile);
     if (!config) throw new Error(`config não encontrada ou sem runtime.owner/product: ${path.relative(root, configFile) || configFile}`);
@@ -212,7 +220,8 @@ class AutoTrackingCli {
     const result = pipeline.runPipeline(root, configFile);
     const summary = pipeline.summarize(result);
     const status = result.diagnostics.some((d) => BLOCKING_DIAGNOSTIC_CODES.has(d.code)) ? 'incomplete' : 'valid';
-    if (command === 'verify') return this.verificationReport(root, paths, result, summary, status);
+    // O pre-push valida fontes commitadas: artefatos locais ignorados não viajam no Git.
+    if (command === 'verify' && !verifyArtifacts) return this.verificationReport(root, paths, result, summary, status, false, false);
     const conflicts = !dryRun ? beforeApply?.(result.changes) ?? [] : [];
     if (conflicts.length) return {
       command, status: 'incomplete', summary, cache: false,
@@ -220,8 +229,6 @@ class AutoTrackingCli {
       diagnosticos: result.diagnostics,
     };
 
-    const implementation = this.implementationFingerprint();
-    const fingerprint = this.fingerprint(pipeline, root, configFile, implementation);
     const { EvidenceWorkbookWriter } = await import('../adapters/reports/evidence-writer.js');
     const workbook = new EvidenceWorkbookWriter();
     const branding = this.resolveBranding(root, config);
@@ -229,7 +236,11 @@ class AutoTrackingCli {
     // runtime/DOM. Corrigir um listener não deve regravar a planilha idêntica.
     const signature = workbook.workbookSignature(result.relatorio, branding);
     const reportChanged = this.fileContent(paths.relatorioFile) !== result.relatorio;
-    const workbookChanged = (await workbook.readWorkbookSignature(paths.excelFile)) !== signature;
+    const workbookChanged = !(await workbook.matchesEvidenceWorkbook(paths.excelFile,
+      { owner: config.owner, product: config.product, entries: result.entries, branding }, signature));
+    if (command === 'verify') return this.verificationReport(root, paths, result, summary, status, reportChanged, workbookChanged);
+    const implementation = this.implementationFingerprint();
+    const fingerprint = this.fingerprint(pipeline, root, configFile, implementation);
     // O cache reutiliza artefatos, nunca substitui a prova sobre o código e os
     // pacotes atualmente instalados (inclusive dependências locais sem lock novo).
     if (result.changes.length === 0 && !reportChanged && !workbookChanged) {
@@ -286,8 +297,12 @@ class AutoTrackingCli {
     result: PipelineResult,
     summary: Summary,
     status: Report['status'],
+    reportChanged: boolean,
+    workbookChanged: boolean,
   ): Report {
     const pending = result.changes.map((change) => `marcação pendente: ${path.relative(root, change.file)}`);
+    if (reportChanged) pending.push(`relatório ausente ou divergente: ${path.relative(root, paths.relatorioFile)}`);
+    if (workbookChanged) pending.push(`planilha ausente ou divergente: ${path.relative(root, paths.excelFile)}`);
     return {
       command: 'verify',
       status: pending.length === 0 ? status : 'incomplete',
@@ -432,7 +447,7 @@ class AutoTrackingCli {
     const repository = GitRepository.at(root);
 
     if (hook === 'pre-push') {
-      const report = await this.run('verify', root, configFile, false);
+      const report = await this.run('verify', root, configFile, false, undefined, false);
       const uncommitted = repository.uncommittedTrackingInputs();
       if (report.status === 'valid' && uncommitted.length === 0) return CLI_EXIT_CODES.valid;
       for (const issue of [...(report.pendencias ?? []), ...uncommitted.map((file) => `fonte não commitada: ${file}`)]) log(issue);

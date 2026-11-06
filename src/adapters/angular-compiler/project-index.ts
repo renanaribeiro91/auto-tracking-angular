@@ -1,10 +1,12 @@
+import { reconcileTrackingSource } from './tracking-source.js';
 // T15–T16 — índice AST do projeto: componentes (definição completa), templates, rotas, aberturas de modal e provider
 import ts from 'typescript';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AngularComponentCatalogBuilder } from './component-catalog.js';
+import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
-import type { ComponentInfo, InlineTemplate, ProjectIndex, ServiceInfo } from '../../application/apply/ports/project-index.js';
+import type { ComponentInfo, InlineTemplate, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
 import { PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
 export type { ComponentInfo, InlineTemplate, ProjectIndex } from '../../application/apply/ports/project-index.js';
 
@@ -25,6 +27,8 @@ interface ClassReference {
 /** Indexa componentes, rotas, serviços e providers Angular a partir dos arquivos TypeScript. */
 export class AngularProjectIndexer {
   private readonly componentCatalogBuilder = new AngularComponentCatalogBuilder();
+
+  reconcileTrackingSource(source: string, file: string): string { return reconcileTrackingSource(source, file); }
 
   listTsFiles(dir: string): string[] {
     const out: string[] = [];
@@ -120,11 +124,18 @@ export class AngularProjectIndexer {
   private classMethods(declaration: ts.ClassDeclaration): Map<string, string> {
     const methods = new Map<string, string>();
     for (const member of declaration.members) {
+      if (ts.isConstructorDeclaration(member) && member.body) methods.set('constructor', member.body.getText());
       if (!member.name || !ts.isIdentifier(member.name)) continue;
       if ((ts.isMethodDeclaration(member) || ts.isGetAccessor(member)) && member.body) methods.set(member.name.text, member.body.getText());
       else if (ts.isPropertyDeclaration(member) && member.initializer) methods.set(member.name.text, member.initializer.getText());
     }
     return methods;
+  }
+
+  private initializers(declaration: ts.ClassDeclaration): ReadonlySet<string> {
+    return new Set(declaration.members.flatMap((member) => ts.isPropertyDeclaration(member)
+      && ts.isIdentifier(member.name) && member.initializer && !ts.isArrowFunction(member.initializer)
+      && !ts.isFunctionExpression(member.initializer) ? [member.name.text] : []));
   }
 
   private injectionTypes(declaration: ts.ClassDeclaration): Map<string, string> {
@@ -187,6 +198,24 @@ export class AngularProjectIndexer {
     return null;
   }
 
+  private actionImports(source: ts.SourceFile, sourceFiles: ReadonlyMap<string, ts.SourceFile>): ReadonlyMap<string, string> {
+    const aliases = new Map<string, string>();
+    for (const node of source.statements) {
+      if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) continue;
+      const file = this.resolveModuleFile(source.fileName, node.moduleSpecifier.text, sourceFiles);
+      const clause = node.importClause;
+      if (!file || !clause) continue;
+      if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+        aliases.set(clause.namedBindings.name.text, `${file}#`);
+      } else if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const item of clause.namedBindings.elements) {
+          aliases.set(item.name.text, `${file}#${item.propertyName?.text ?? item.name.text}`);
+        }
+      }
+    }
+    return aliases;
+  }
+
   private resolveClass(
     reference: ClassReference,
     kind: ClassRecord['kind'],
@@ -200,19 +229,63 @@ export class AngularProjectIndexer {
     const targetFile = imported ?? (importRef?.moduleSpecifier ? this.resolveModuleFile(reference.file, importRef.moduleSpecifier, sourceFiles) : null);
     const targetName = importRef?.className ?? reference.className;
     if (targetFile) {
-      const declarations = recordsByFile.get(targetFile);
-      const exact = targetName === 'default'
-        ? [...(declarations?.values() ?? [])].find((record) =>
-            (ts.getModifiers(record.declaration) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword),
-          )
-        : declarations?.get(targetName);
-      return exact?.kind === kind ? exact : null;
+      return this.resolveExportedClass(targetFile, targetName, kind, sourceFiles, recordsByFile, new Set());
     }
 
     const local = recordsByFile.get(path.resolve(reference.file))?.get(reference.className);
     if (local?.kind === kind) return local;
     const matches = (recordsByName.get(reference.className) ?? []).filter((record) => record.kind === kind);
     return matches.length === 1 ? matches[0]! : null;
+  }
+
+  private resolveExportedClass(
+    file: string,
+    name: string,
+    kind: ClassRecord['kind'],
+    sourceFiles: ReadonlyMap<string, ts.SourceFile>,
+    recordsByFile: ReadonlyMap<string, ReadonlyMap<string, ClassRecord>>,
+    visited: ReadonlySet<string>,
+  ): ClassRecord | null {
+    const key = `${file}#${name}`;
+    if (visited.has(key)) return null;
+    const declarations = recordsByFile.get(file);
+    const exact = name === 'default'
+      ? [...(declarations?.values() ?? [])].find((record) =>
+          (ts.getModifiers(record.declaration) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword),
+        )
+      : declarations?.get(name);
+    if (exact) return exact.kind === kind ? exact : null;
+
+    const source = sourceFiles.get(file);
+    if (!source) return null;
+    const nextVisited = new Set(visited).add(key);
+    const explicit: ClassRecord[] = [];
+    const stars: ClassRecord[] = [];
+    for (const statement of source.statements) {
+      if (!ts.isExportDeclaration(statement)) continue;
+      const specifier = statement.moduleSpecifier;
+      const exportedFile = specifier && ts.isStringLiteral(specifier)
+        ? this.resolveModuleFile(file, specifier.text, sourceFiles)
+        : null;
+      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+        for (const item of statement.exportClause.elements) {
+          if (item.name.text !== name) continue;
+          const original = item.propertyName?.text ?? item.name.text;
+          const localImport = !exportedFile ? this.importReferences(source).get(original) : undefined;
+          const from = exportedFile ?? (localImport?.moduleSpecifier
+            ? this.resolveModuleFile(file, localImport.moduleSpecifier, sourceFiles)
+            : file);
+          const resolved = from && this.resolveExportedClass(from, localImport?.className ?? original, kind, sourceFiles, recordsByFile, nextVisited);
+          if (resolved) explicit.push(resolved);
+        }
+      } else if (!statement.exportClause && exportedFile && name !== 'default') {
+        const resolved = this.resolveExportedClass(exportedFile, name, kind, sourceFiles, recordsByFile, nextVisited);
+        if (resolved) stars.push(resolved);
+      }
+    }
+    const candidates = explicit.length ? explicit : stars;
+    const unique = new Map(candidates.map((record) => [record.key, record]));
+    return unique.size === 1 ? unique.values().next().value! : null;
   }
 
   private componentReferencesIn(
@@ -226,7 +299,9 @@ export class AngularProjectIndexer {
     const result = new Set<string>();
     const visit = (current: ts.Node): void => {
       if (ts.isIdentifier(current)) {
-        const record = this.resolveClass({ file, className: current.text, ...(moduleSpecifier ? { moduleSpecifier } : {}) }, 'component', sourceFiles, recordsByName, recordsByFile);
+        const reference = this.dynamicComponentReference(current)
+          ?? { file, className: current.text, ...(moduleSpecifier ? { moduleSpecifier } : {}) };
+        const record = this.resolveClass(reference, 'component', sourceFiles, recordsByName, recordsByFile);
         if (record) result.add(record.key);
       }
       ts.forEachChild(current, visit);
@@ -235,11 +310,36 @@ export class AngularProjectIndexer {
     return result;
   }
 
-  buildProjectIndex(scanRoot: string): ProjectIndex {
+  /** Resolve aliases locais de `const { Modal: View } = await import('./modal')`. */
+  private dynamicComponentReference(identifier: ts.Identifier): ClassReference | null {
+    for (let scope: ts.Node | undefined = identifier.parent; scope; scope = scope.parent) {
+      if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue;
+      for (const statement of scope.statements) {
+        if (!ts.isVariableStatement(statement) || statement.getStart() > identifier.getStart()) continue;
+        for (const declaration of statement.declarationList.declarations) {
+          if (!ts.isObjectBindingPattern(declaration.name) || !declaration.initializer) continue;
+          const initializer = ts.isAwaitExpression(declaration.initializer)
+            ? declaration.initializer.expression : declaration.initializer;
+          if (!ts.isCallExpression(initializer) || initializer.expression.kind !== ts.SyntaxKind.ImportKeyword) continue;
+          const specifier = initializer.arguments[0];
+          if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
+          const binding = declaration.name.elements.find((item) => ts.isIdentifier(item.name) && item.name.text === identifier.text);
+          if (!binding || binding.dotDotDotToken) continue;
+          const imported = binding.propertyName ?? binding.name;
+          if (ts.isIdentifier(imported) || ts.isStringLiteralLike(imported)) {
+            return { file: identifier.getSourceFile().fileName, className: imported.text, moduleSpecifier: specifier.text };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  buildProjectIndex(scanRoot: string, sources?: ReadonlyMap<string, string>): ProjectIndex {
     const sourceFiles = new Map<string, ts.SourceFile>();
     for (const file of this.listTsFiles(scanRoot)) {
       const absolute = path.resolve(file);
-      sourceFiles.set(absolute, ts.createSourceFile(absolute, fs.readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true));
+      sourceFiles.set(absolute, ts.createSourceFile(absolute, sources?.get(absolute) ?? fs.readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true));
     }
 
     const records: ClassRecord[] = [];
@@ -276,9 +376,17 @@ export class AngularProjectIndexer {
     }
 
     const componentRaw = new Map<string, { readonly info: ComponentInfo; readonly injections: ReadonlyMap<string, string> }>();
+    const baseClass = (record: ClassRecord): string | undefined => {
+      const expression = record.declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+      if (!expression || !ts.isIdentifier(expression)) return undefined;
+      const reference = { file: record.file, className: expression.text };
+      return (this.resolveClass(reference, 'service', sourceFiles, recordsByName, recordsByFile)
+        ?? this.resolveClass(reference, 'component', sourceFiles, recordsByName, recordsByFile))?.key;
+    };
     const serviceRaw = new Map<string, { readonly record: ClassRecord; readonly methods: ReadonlyMap<string, string>; readonly injections: ReadonlyMap<string, string> }>();
     for (const record of records) {
       const declaration = record.declaration;
+      const base = baseClass(record);
       if (record.kind === 'service') {
         serviceRaw.set(record.key, {
           record,
@@ -309,6 +417,7 @@ export class AngularProjectIndexer {
       componentRaw.set(record.key, {
         info: {
           key: record.key,
+          ...(base ? { baseClass: base } : {}),
           className: record.className,
           tsFile: record.file,
           templateFile,
@@ -318,6 +427,13 @@ export class AngularProjectIndexer {
           classText: declaration.getText(),
           serviceDependencies: new Map(),
           methods: this.classMethods(declaration),
+          initializers: this.initializers(declaration),
+          methodComponents: new Map(declaration.members.flatMap((member) => {
+            const name = ts.isConstructorDeclaration(member) ? 'constructor'
+              : member.name && ts.isIdentifier(member.name) ? member.name.text : null;
+            if (!name) return [];
+            return [[name, this.componentReferencesIn(member, record.file, undefined, sourceFiles, recordsByName, recordsByFile)] as const];
+          })),
           referencedComponents: new Set(),
         },
         injections: this.injectionTypes(declaration),
@@ -343,20 +459,26 @@ export class AngularProjectIndexer {
     }));
     const services = new Map<string, ServiceInfo>();
     for (const [key, { record, methods, injections }] of serviceRaw) {
+      const base = baseClass(record);
       const dependencies = new Map<string, string>();
       for (const [property, className] of injections) {
         const service = resolveService(record.file, className);
         if (service && service.key !== key) dependencies.set(property, service.key);
       }
-      services.set(key, { key, className: record.className, tsFile: record.file, text: record.declaration.getText(), methods, dependencies, openedComponents: new Map() });
+      services.set(key, { key, className: record.className, tsFile: record.file, text: record.declaration.getText(), methods, dependencies,
+        ...(base ? { baseClass: base } : {}),
+        initializers: this.initializers(record.declaration), openedComponents: new Map() });
     }
 
     const routedComponents = new Set<string>();
     const ambiguousRoutes: { file: string; className: string; line: number }[] = [];
     const opens = new Map<string, Set<string>>();
     const rawServiceOpens = new Map<string, Map<string, Set<string>>>();
+    const surfaces: SurfaceDeclaration[] = [];
+    const surfaceErrors: { file: string; line: number; message: string }[] = [];
     let providerCalls = 0;
     for (const [file, source] of sourceFiles) {
+      const surfaceFactories = surfaceFactoryNames(source);
       const resolveComponent = (className: string, moduleSpecifier?: string): ClassRecord | null =>
         this.resolveClass({ file, className, ...(moduleSpecifier ? { moduleSpecifier } : {}) }, 'component', sourceFiles, recordsByName, recordsByFile);
       const addRoute = (className: string, at: ts.Node, moduleSpecifier?: string): void => {
@@ -412,7 +534,28 @@ export class AngularProjectIndexer {
           }
         }
 
-        if (owner?.kind === 'service' && methodName && ts.isNewExpression(node)) {
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && surfaceFactories.has(node.expression.text)) {
+          try {
+            const parsed = readSurfaceDeclaration(node, source);
+            if (!owner || !methodName) throw new Error('declare a superfície no método que a abre para provar sua origem');
+            const declaration = { ...parsed, ownerKey: owner.key, method: methodName };
+            surfaces.push(declaration);
+            components.push({ key: declaration.componentKey, className: declaration.definition.id,
+              tsFile: file, templateFile: null, inlineTemplate: false, inline: null,
+              def: { selectors: [], source: 'projeto', outputs: new Map(), inputs: new Set(), template: '', methods: new Map(), hostListeners: [] },
+              classText: '', serviceDependencies: new Map(), methods: new Map(), referencedComponents: new Set() });
+            if (owner.kind === 'service') this.addServiceOpen(rawServiceOpens, owner.key, methodName, declaration.componentKey);
+            else {
+              const opened = opens.get(owner.key) ?? new Set<string>();
+              opened.add(declaration.componentKey);
+              opens.set(owner.key, opened);
+            }
+          } catch (error) {
+            surfaceErrors.push({ file, line: source.getLineAndCharacterOfPosition(node.getStart()).line + 1, message: String(error) });
+          }
+        }
+
+        if (owner?.kind === 'service' && methodName && (ts.isNewExpression(node) || ts.isCallExpression(node))) {
           const references = node.arguments?.flatMap((argument) => [...this.componentReferencesIn(argument, file, undefined, sourceFiles, recordsByName, recordsByFile)]) ?? [];
           for (const target of references) this.addServiceOpen(rawServiceOpens, owner.key, methodName, target);
         }
@@ -426,7 +569,44 @@ export class AngularProjectIndexer {
       const openedComponents = rawServiceOpens.get(serviceKey) ?? new Map<string, Set<string>>();
       services.set(serviceKey, { ...service, openedComponents });
     }
-    return { components, routedComponents, ambiguousRoutes, opens, services, providerCalls };
+    const actionImports = new Map([...sourceFiles].map(([file, source]) => [file, this.actionImports(source, sourceFiles)]));
+    const trackingFiles = [...sourceFiles].filter(([, source]) => source.statements.some((node) =>
+      ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
+      && node.moduleSpecifier.text === 'auto-tracking-angular')).map(([file]) => file);
+    const dynamicMethodValues = new Map<string, Set<string>>();
+    const eagerServices = new Set<string>();
+    for (const [file, source] of sourceFiles) {
+      const values = (name: string, expression: ts.Expression): void => {
+        if (!ts.isStringLiteralLike(expression)) return;
+        const current = dynamicMethodValues.get(name) ?? new Set<string>();
+        current.add(expression.text); dynamicMethodValues.set(name, current);
+      };
+      const eager = (node: ts.Node): void => {
+        if (ts.isIdentifier(node)) {
+          const service = resolveService(file, node.text);
+          if (service) eagerServices.add(service.key);
+        }
+        ts.forEachChild(node, eager);
+      };
+      const inspect = (node: ts.Node): void => {
+        if (ts.isPropertyAssignment(node) && !ts.isComputedPropertyName(node.name)) {
+          const name = ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name) ? node.name.text : '';
+          values(name, node.initializer);
+          if (name === 'providers') eager(node.initializer);
+        }
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+          values(node.name.text, node.initializer);
+          if (node.name.text === 'providers') eager(node.initializer);
+        }
+        if (ts.isCallExpression(node) && /^(?:provideEffects|EffectsModule\.(?:forRoot|forFeature))$/.test(node.expression.getText(source))) {
+          for (const argument of node.arguments) eager(argument);
+        }
+        ts.forEachChild(node, inspect);
+      };
+      inspect(source);
+    }
+    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles,
+      dynamicMethodValues, eagerServices };
   }
 
   private addServiceOpen(

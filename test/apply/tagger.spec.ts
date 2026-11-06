@@ -1,7 +1,7 @@
-import { tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
+import { TemplateTagger, tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
 import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 import type { ComponentCatalog, ComponentDef } from '../../src/application/apply/ports/component-catalog.js';
-import { staticListLabels } from '../../src/application/apply/selection-provenance.js';
+import { listItemFields as listItemFields_, staticListLabels } from '../../src/application/apply/selection-provenance.js';
 import type { ComponentInfo } from '../../src/application/apply/ports/project-index.js';
 
 const def = (over: Partial<ComponentDef> & Pick<ComponentDef, 'selectors'>): ComponentDef => ({
@@ -50,6 +50,13 @@ const ctx = (over: Partial<TagContext> = {}): TagContext => ({
 });
 
 describe('tagger: toda interação declarada no template', () => {
+  it('retira apenas tracking de componente sem uso e conserva comentários e bindings de negócio', () => {
+    const tagger = new TemplateTagger();
+    const source = '<!-- <button data-at-id="exemplo"> -->\n<button data-testid="salvar" data-at-id="antigo" [attr.data-at-ref]="token" (click)="salvar()">Salvar</button>';
+    const expected = '<!-- <button data-at-id="exemplo"> -->\n<button data-testid="salvar" (click)="salvar()">Salvar</button>';
+    expect(tagger.untagTemplate(source)).toBe(expected);
+    expect(tagger.untagTemplate(expected)).toBe(expected);
+  });
   it('identificador de teste em aria-label vira rótulo sem prefixo técnico e substitui rótulo técnico antigo', () => {
     const result = tagTemplate(`<ion-icon data-at-id="rating" data-at-rotulo="on-cliked" [attr.aria-label]="'icon-star-ranking-avaliar'" (click)="onCliked()"></ion-icon>`, ctx());
     expect(result.entries[0]).toMatchObject({ id: 'rating', rotulo: 'star-ranking-avaliar' });
@@ -124,13 +131,36 @@ describe('tagger: toda interação declarada no template', () => {
       expect(block.html).toContain('data-at-rotulos="saude-em-equilibrio|salas-vip"');
       const external = tagTemplate('<x-botao *ngFor="let b of externos" [title]="b.titulo" (click)="abrir(b)"></x-botao>', ctx({ listLabels }));
       // Lista não provável: o texto é lido no clique; 'abrir' segue como fallback do contrato.
-      expect(external.entries[0]).toMatchObject({ rotulo: '[texto-exibido-no-elemento]' });
+      expect(external.entries[0]).toMatchObject({ rotulo: '[rotulo-do-botao-exibido]' });
       expect(external.html).toContain('data-at-rotulo="abrir"');
       expect(external.html).toMatch(/data-at-rotulo-dinamico="[^"|]+"/);
       expect(external.entries[0]!.rotulos).toBeUndefined();
     });
   });
 
+  it('item de pessoa física: envia o descritor público provado pelo tipo, nunca o nome da pessoa', () => {
+    const classText = `interface Prestador { nomePrestador: string; nomeEspecialidade: string; cpfPrestador: string; }
+    class ListaComponent { @Input() itens: Prestador[] = []; @Input() semTipo = []; }`;
+    const listItemFields = listItemFields_({ classText } as ComponentInfo);
+    const html = (list: string) => `<bsmo-card *ngFor="let p of ${list}" (click)="selecionarProfissional(p)"><b>{{ p.nomePrestador }}</b><i>{{ p.nomeEspecialidade }}</i></bsmo-card>`;
+    const typed = tagTemplate(html('itens'), ctx({ listItemFields }));
+    expect(typed.html).toContain('[attr.data-at-option]="p.nomeEspecialidade"');
+    expect(typed.html).not.toContain('data-at-option]="p.nomePrestador"');
+    expect(typed.entries[0]?.opcao_selecionada_1).toBe('[nome-especialidade-selecionado]');
+    expect(typed.diagnostics.map((d) => d.code)).not.toContain('OPTION_PUBLIC_VALUE_UNPROVEN');
+    const untyped = tagTemplate(html('semTipo'), ctx({ listItemFields }));
+    expect(untyped.html).not.toContain('data-at-option');
+    expect(untyped.diagnostics.map((d) => d.code)).toContain('OPTION_PUBLIC_VALUE_UNPROVEN');
+    // Sem identificador de pessoa física no tipo não há prova de que o nome é de outro sujeito.
+    const semCpf = listItemFields_({ classText: 'interface M { nomeMedico: string; nomeEspecialidade: string; } class C { itens: M[] = []; }' } as ComponentInfo);
+    expect(tagTemplate(html('itens').replace('nomePrestador', 'nomeMedico'), ctx({ listItemFields: semCpf })).html).not.toContain('data-at-option');
+  });
+  it('campo genérico da opção recebe o objeto do handler na planilha', () => {
+    const listLabels = () => ['A', 'B'];
+    const r = tagTemplate('<div *ngFor="let c of itens" [attr.aria-label]="c.name" (click)="selecionarSala(c)"></div>', ctx({ listLabels }));
+    expect(r.entries[0]?.opcao_selecionada_1).toBe('[nome-sala-selecionado]');
+    expect(r.html).toContain('[attr.data-at-option]="c.name"');
+  });
   it('aria-label dinâmico não vira rótulo: valor variável nunca é enviado, usa o nome da ação', () => {
     const result = tagTemplate('<button [attr.aria-label]="item.nome" (click)="escolher()"></button>', ctx());
     expect(result.entries[0]).toMatchObject({ rotulo: 'escolher' });
@@ -138,16 +168,16 @@ describe('tagger: toda interação declarada no template', () => {
   it('documenta seleção dinâmica apenas quando há evento de mudança observável', () => {
     const selection = tagTemplate('<ion-select (ionChange)="selecionar($event)"></ion-select>', ctx());
     const action = tagTemplate('<button (click)="salvar()">Salvar</button>', ctx());
-    expect(selection.entries[0]?.opcao_selecionada_1).toBe('dinâmica (opção selecionada)');
+    expect(selection.entries[0]?.opcao_selecionada_1).toBe('[valor-selecionado]');
     const nativeSelect = tagTemplate('<select (change)="selecionar($event)"><option>Primeira</option></select>', ctx());
     expect(nativeSelect.entries).toHaveLength(1);
-    expect(nativeSelect.entries[0]?.opcao_selecionada_1).toBe('dinâmica (opção selecionada)');
+    expect(nativeSelect.entries[0]?.opcao_selecionada_1).toBe('[valor-selecionado]');
     expect(action.entries[0]?.opcao_selecionada_1).toBeUndefined();
   });
   it('(click) nativo: id, módulo, tela, elemento e rótulo estáveis', () => {
     const r = tagTemplate('<ion-button (click)="avancar()">Avançar</ion-button>', ctx());
     expect(r.html).toBe(
-      '<ion-button data-at-id="reembolso-tipo-documento-avancar" data-at-elemento="botao" data-at-rotulo="avancar" data-at-owner="mfe-exemplo" data-at-funcionalidade="reembolso" data-at-tela="tipo-documento" (click)="avancar()">Avançar</ion-button>',
+      '<ion-button data-at-id="reembolso-tipo-documento-avancar" data-at-elemento="botao" data-at-rotulo="avancar" data-at-owner="mfe-exemplo" data-at-funcionalidade="reembolso" data-at-tela="tipo-documento" data-at-origin="required" (click)="avancar()">Avançar</ion-button>',
     );
     expect(r.entries[0]).toMatchObject({ evento: 'click', acao: 'clique', elemento: 'botao', rotulo: 'avancar', origem: '(click)' });
   });
@@ -161,7 +191,8 @@ describe('tagger: toda interação declarada no template', () => {
 
   it('rótulo ignora blocos @if/@else e URLs; id fica curto', () => {
     const r = tagTemplate('<button (click)="ok()">@if (logado) { Li e concordo com os termos de uso e a política de privacidade https://exemplo.invalid/termos }</button>', ctx());
-    expect(r.entries[0]!.id).toBe('reembolso-tipo-documento-li-e-concordo-com-os-termos');
+    expect(r.entries[0]!.id).toBe('reembolso-tipo-documento-ok');
+    expect(r.entries[0]!.rotulo).toBe('[rotulo-do-botao-exibido]');
     expect(r.entries[0]!.rotulo).not.toMatch(/https|logado/);
   });
 
@@ -220,7 +251,7 @@ describe('tagger: toda interação declarada no template', () => {
   it('saídas de componente de biblioteca são mapeadas até o elemento interno que as dispara', () => {
     const r = tagTemplate('<lib-header (voltar)="voltar()" (icone)="abrirMapa()" (valorChange)="x=$event" (blur)="t()"></lib-header>', ctx());
     expect(r.html).toContain(
-      'data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar;reembolso-tipo-documento-abrir-mapa|click|div.acao.icone|abrir-mapa|icone"',
+      'data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar|botao;reembolso-tipo-documento-abrir-mapa|click|div.acao.icone|abrir-mapa|icone|botao"',
     );
     expect(r.entries.map((e) => e.origem)).toEqual(['(voltar) em <lib-header>', '(icone) em <lib-header>']);
   });
@@ -422,7 +453,7 @@ describe('tagger: toda interação declarada no template', () => {
 
   it('componente do projeto: elemento interno já é marcado no próprio template; só o HostListener vai no host', () => {
     const r = tagTemplate('<app-card (abrir)="ver()" (tocar)="tocar()"></app-card>', ctx());
-    expect(r.html).toContain('data-at-outputs="reembolso-tipo-documento-tocar|click|:host|tocar|tocar"');
+    expect(r.html).toContain('data-at-outputs="reembolso-tipo-documento-tocar|click|:host|tocar|tocar|lista"');
     expect(r.entries).toHaveLength(1);
   });
 
@@ -473,7 +504,7 @@ describe('tagger: toda interação declarada no template', () => {
     const old = '<lib-header data-at-outputs="x|click|#btnVoltar|voltar" data-at-owner="mfe-exemplo"\n  (voltar)="voltar()"></lib-header>';
     const r = tagTemplate(old, ctx({ usedIds: new Set(['x']) }));
     expect(r.html.startsWith('<lib-header ')).toBe(true);
-    expect(r.html).toContain('data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar"');
+    expect(r.html).toContain('data-at-outputs="reembolso-tipo-documento-voltar|click|#btnVoltar|voltar|voltar|botao"');
     expect(r.html.match(/data-at-outputs=/g)).toHaveLength(1);
     expect(tagTemplate(r.html, ctx({ usedIds: new Set(r.entries.map((e) => e.id)) })).html).toBe(r.html);
   });
@@ -516,6 +547,20 @@ describe('tagger: toda interação declarada no template', () => {
     const generated = tagTemplate(manual, ctx({ mode: 'ref' }));
     expect(generated.html).toBe(manual);
     expect(generated.html).not.toMatch(/(?:^|\s)data-at-ref="/);
+  });
+
+  it('reconcilia token literal anterior no binding sem alterar a condição nem duplicar o evento', () => {
+    const old = tagTemplate('<button (click)="salvar()">Salvar</button>', ctx({ mode: 'ref', isScreen: true }));
+    const token = /data-at-ref="([^"]+)"/.exec(old.html)![1]!;
+    const input = `<button [attr.data-at-ref]="visivel ? '${token}' : null" (click)="salvar()">Salvar</button>`;
+    const first = tagTemplate(input, ctx({ mode: 'ref' }));
+    expect(first.diagnostics).toEqual([]);
+    expect(first.html).toContain('[attr.data-at-ref]="visivel ?');
+    expect(first.html).toContain(': null"');
+    expect(first.html).not.toMatch(/\sdata-at-ref="/);
+    expect(first.entries).toHaveLength(2); // marcador de tela e clique preservados do contrato anterior.
+    expect(first.entries.every((entry) => decodeTrackingToken(entry.ref!)?.requireOrigin)).toBe(true);
+    expect(tagTemplate(first.html, ctx({ mode: 'ref' })).html).toBe(first.html);
   });
 
   it('remove referência estática concorrente e preserva binding manual válido sem perder o evento', () => {
@@ -572,7 +617,7 @@ describe('tagger: rótulo de texto dinâmico', () => {
     const token = tokenOf(result.html);
     expect(token.rotuloDinamico).toEqual([token.outputs![0]!.id]);
     expect(token.outputs![0]!.label).not.toMatch(/bsds/);
-    expect(result.entries.find((entry) => entry.evento === 'click')!.rotulo).toBe('[texto-exibido-no-elemento]');
+    expect(result.entries.find((entry) => entry.evento === 'click')!.rotulo).toBe('[rotulo-do-botao-exibido]');
   });
 
   it('expressão com indício de dado pessoal mantém o rótulo semântico e não lê o DOM', () => {

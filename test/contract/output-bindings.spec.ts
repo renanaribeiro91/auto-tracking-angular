@@ -22,6 +22,14 @@ describe('contrato de outputs: compactação sem renomear eventos', () => {
     expect(encodeOutputBindings(decodeOutputBindings(old))).toBe(old);
   });
 
+  it('preserva a classificação do relatório nos formatos legado e compacto', () => {
+    const binding: OutputBinding = { id: 'tipo', event: 'change', selector: ':host', label: 'tipo', output: 'onChange', elemento: 'dropdown' };
+    expect(decodeOutputBindings(encodeOutputBindings([binding]))).toEqual([binding]);
+    const compact = { ...binding, selector: 'button[role="option"]' };
+    expect(encodeOutputBindings([compact])).toMatch(/^v2:/);
+    expect(decodeOutputBindings(encodeOutputBindings([compact]))).toEqual([compact]);
+  });
+
   it('não reordena outputs intercalados que competem pelo mesmo seletor', () => {
     const interleaved = [samples[0]!, samples[3]!, samples[1]!];
     const encoded = encodeOutputBindings(interleaved);

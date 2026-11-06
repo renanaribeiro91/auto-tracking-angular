@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import ExcelJS from 'exceljs';
+import { loadWorkbookProvider } from '../../src/adapters/reports/excel-workbook.js';
 import { writeEvidenceWorkbook } from '../../src/adapters/reports/evidence-writer.js';
 import type { TagEntry } from '../../src/application/apply/tagger.js';
 
@@ -18,6 +18,7 @@ it('centraliza o resumo e aplica o mesmo fundo a todas as abas', async () => {
       owner: 'app', product: 'produto', entries: [item('primeiro'), item('segundo')],
       branding: { watermarkPng: path.resolve('test/fixtures/watermark.png') },
     }, 'sig');
+    const ExcelJS = await loadWorkbookProvider();
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(file);
     const summary = workbook.getWorksheet('Resumo')!;

@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-import { installDomTracker, emitScreenView, type DomTrackerDeps } from '../../src/adapters/runtime/dom-tracker.js';
+import { AutoTrackingSurfaces, installDomTracker, emitScreenView, type DomTrackerDeps } from '../../src/adapters/runtime/dom-tracker.js';
 import { examplePreset } from '../fixtures/preset/index.js';
 import type { TrackingEvent } from '../../src/config.js';
 import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
@@ -21,6 +21,69 @@ const at = (owner: string, id: string, extra = '') =>
 const clickPayload = (tela: string, rotulo: string, extra: Record<string, string> = {}) => ({
   name: 'click',
   params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', tela: `app-x:saude:${tela}`, categoria: `app-x:saude:${tela}`, elemento: 'botao', rotulo, acao: 'clique', ...extra },
+});
+
+describe('runtime: interação compartilhada exige origem comprovada', () => {
+  const sent: TrackingEvent[] = [];
+  const warnings: string[] = [];
+  let stop: (() => void) | undefined;
+  const ref = () => encodeTrackingToken({ owner: 'mob', funcionalidade: 'componente', tela: 'modal-service', requireOrigin: true,
+    click: { id: 'confirmar', event: 'click', elemento: 'botao', rotulo: 'confirmar' } });
+  const click = () => document.getElementById('action')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+  const install = (surfaces?: AutoTrackingSurfaces) => {
+    stop = installDomTracker(document, { ...deps('mob', sent, 'app-x', warnings), mode: 'ref', ...(surfaces ? { surfaces } : {}) });
+  };
+  beforeEach(() => {
+    sent.length = 0; warnings.length = 0;
+    document.documentElement.removeAttribute('data-at-current-screen');
+    document.body.innerHTML = `<app-root><button id="action" data-at-ref="${ref()}">Confirmar</button></app-root>`;
+  });
+  afterEach(() => stop?.());
+
+  it('bloqueia componente isolado mesmo com marcador global de outro contexto', async () => {
+    document.documentElement.setAttribute('data-at-current-screen', 'outro|home');
+    install(); click(); await flush();
+    expect(sent).toEqual([]);
+    expect(warnings).toEqual([expect.stringContaining('sem tela identificável')]);
+  });
+
+  it('usa a tela roteada ancestral do mesmo owner em vez da identidade do componente', async () => {
+    const marker = document.createElement('header');
+    marker.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mob', funcionalidade: 'reembolso', tela: 'documentos', screenId: 'pagina' }));
+    document.querySelector('app-root')!.prepend(marker);
+    install(); click(); await flush();
+    expect(sent.filter((event) => event.name === 'click')).toEqual([clickPayload('documentos', 'confirmar')]);
+  });
+
+  it('não aceita tela ancestral nem captura de owner diferente', async () => {
+    const marker = document.createElement('header');
+    marker.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'outro', funcionalidade: 'reembolso', tela: 'documentos', screenId: 'pagina' }));
+    document.querySelector('app-root')!.prepend(marker);
+    install(new AutoTrackingSurfaces('outro', () => ({ funcionalidade: 'reembolso', tela: 'outra' })));
+    click(); await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('componente fora da página usa a origem atual fornecida pelo seu owner', async () => {
+    install(new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' })));
+    click(); await flush();
+    expect(sent).toEqual([clickPayload('documentos', 'confirmar')]);
+  });
+
+  it('overlay exige vínculo registrado e usa a tela visível do owner no gesto', async () => {
+    let current = { funcionalidade: 'reembolso', tela: 'documentos' };
+    const surfaces = new AutoTrackingSurfaces('mob', () => current);
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${ref()}">Confirmar</button></ion-modal>`;
+    install(surfaces); click(); await flush();
+    expect(sent).toEqual([]);
+    const captured = surfaces.capture()!;
+    const detach = surfaces.register(document.querySelector('ion-modal')!, { screen: captured, actions: [] });
+    current = { funcionalidade: 'reembolso', tela: 'outra' };
+    click(); await flush();
+    expect(sent).toEqual([clickPayload('outra', 'confirmar')]);
+    detach(); click(); await flush();
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe('runtime: emissão no formato do Builder do time', () => {
@@ -135,7 +198,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
     for (const id of ['vip', 'home', 'pessoa', 'aria']) click(`#${id} b`);
     await flush();
-    expect(fed.map((event) => event.params['rotulo'])).toEqual(['salas-vip', 'welcome-home', 'navegar-para', 'welcome']);
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['salas-vip', 'welcome-home', 'welcome']);
     expect(JSON.stringify(fed)).not.toMatch(/maria/i);
   });
 
@@ -153,7 +216,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     button.querySelector('span')!.textContent = 'Cartão 1234 5678 9012';
     click('#dyn span');
     await flush();
-    expect(fed.map((event) => event.params['rotulo'])).toEqual(['orientacao-do-reembolso', 'solicitar-reembolso', 'botao']);
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['orientacao-do-reembolso', 'solicitar-reembolso']);
     expect(JSON.stringify(fed)).not.toMatch(/1234|novo/);
   });
 
@@ -245,14 +308,208 @@ describe('runtime: emissão no formato do Builder do time', () => {
     expect(fed).toHaveLength(0);
   });
 
-  it('ionChange envia a opção escolhida; o clique no select não emite', async () => {
-    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `<ion-select id="sel" aria-label="Tipo de documento" ${at('mob', 'sel', 'data-at-event="ionChange"')}><ion-select-option>Recibo médico</ion-select-option></ion-select>`);
+  it('select emite abertura e escolha separadamente, sem opção atribuída à abertura', async () => {
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `<ion-select id="sel" aria-label="Tipo de documento" ${at('mfe-exemplo', 'sel', 'data-at-event="ionChange"')}><ion-select-option>Recibo médico</ion-select-option></ion-select>`);
     const sel = document.getElementById('sel')!;
     (sel.querySelector('ion-select-option') as unknown as { value: string }).value = 'r1';
     sel.click();
     sel.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { value: 'r1' } }));
     await flush();
-    expect(mob).toEqual([clickPayload('tipo-documento', 'sel', { opcao_selecionada_1: 'recibo-medico' })]);
+    expect(fed).toEqual([
+      clickPayload('tipo-documento', 'sel'),
+      clickPayload('tipo-documento', 'sel', { opcao_selecionada_1: 'recibo-medico' }),
+    ]);
+  });
+
+  it('não conta o botão interno de limpar como abertura do select', async () => {
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `
+      <bsad-form-select id="campo" ${at('mfe-exemplo', 'tipo', 'data-at-event="ionChange"')}>
+        <ion-select id="abrir"></ion-select><button id="limpar">Limpar</button>
+      </bsad-form-select>`);
+    click('#limpar');
+    click('#abrir');
+    await flush();
+    expect(fed).toEqual([clickPayload('tipo-documento', 'tipo')]);
+  });
+
+  it('modo ref também mantém abertura e escolha como gestos separados', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', '<ion-select id="ref-select"><ion-select-option>Recibo médico</ion-select-option></ion-select>');
+    const select = document.getElementById('ref-select')!;
+    (select.querySelector('ion-select-option') as Element & { value?: string }).value = 'r1';
+    select.setAttribute('data-at-ref', encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      click: { id: 'tipo-documento', event: 'ionChange', elemento: 'dropdown', rotulo: 'tipo-documento' } }));
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    select.click();
+    select.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { value: 'r1' } }));
+    await flush();
+    expect(fed.map((event) => event.params['opcao_selecionada_1'])).toEqual([undefined, 'recibo-medico']);
+  });
+
+  it('radio identifica a opção e checkbox identifica o estado sem confundir o clique de abertura', async () => {
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `
+      <ion-radio-group id="grupo" ${at('mob', 'grupo', 'data-at-event="ionChange"')}>
+        <ion-radio id="opcao" aria-label="Consulta digital">Consulta digital</ion-radio>
+      </ion-radio-group>
+      <ion-checkbox id="aceite" ${at('mob', 'aceite', 'data-at-event="ionChange"')}>Aceitar</ion-checkbox>`);
+    const grupo = document.getElementById('grupo')!;
+    (document.getElementById('opcao') as Element & { value?: unknown }).value = 'digital';
+    grupo.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { value: 'digital' } }));
+    const aceite = document.getElementById('aceite')!;
+    aceite.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    aceite.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { checked: true } }));
+    await flush();
+    expect(mob).toHaveLength(2);
+    expect(mob.map((event) => event.params['opcao_selecionada_1'])).toEqual(['consulta-digital', 'true']);
+  });
+
+  it('seleção múltipla consulta somente o controle uma vez por mudança e preserva a ordem dos valores', async () => {
+    const select = document.createElement('select');
+    select.setAttribute('data-at-ref', encodeTrackingToken({
+      owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      click: { id: 'atendimento', event: 'change', elemento: 'dropdown', rotulo: 'atendimento' },
+    }));
+    select.innerHTML = '<option value="a">Consulta digital</option><option value="b">Consulta presencial</option>';
+    document.body.appendChild(select);
+    stops.forEach((stop) => stop()); stops = [];
+    stops.push(installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' }));
+    const query = jest.spyOn(select, 'querySelectorAll');
+    const documentQuery = jest.spyOn(document, 'querySelectorAll');
+    try {
+      for (let index = 0; index < 20; index++) {
+        select.dispatchEvent(new CustomEvent('change', { bubbles: true, composed: true, detail: { value: ['b', 'a'] } }));
+      }
+      expect(query).toHaveBeenCalledTimes(20);
+      expect(documentQuery).not.toHaveBeenCalled();
+      await flush();
+      expect(fed).toHaveLength(20);
+      expect(fed.every((event) => event.params['opcao_selecionada_1'] === 'consulta-presencial-consulta-digital')).toBe(true);
+    } finally {
+      query.mockRestore();
+      documentQuery.mockRestore();
+    }
+  });
+
+  it('select multiple nativo inclui todas as opções selecionadas e respeita o rótulo visível', async () => {
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `
+      <select id="selecao-multipla" multiple ${at('mob', 'atendimento', 'data-at-event="change"')}>
+        <option value="a" selected label="Consulta digital">Texto alternativo</option>
+        <option value="b">Não selecionada</option>
+        <option value="c" selected>Consulta presencial</option>
+      </select>`);
+    document.getElementById('selecao-multipla')!.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    await flush();
+    expect(mob[0]?.params['opcao_selecionada_1']).toBe('consulta-digital-consulta-presencial');
+  });
+
+  it('checkbox nativo informa o estado e radio nativo informa o rótulo da opção', async () => {
+    document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `
+      <label><input id="checkbox-nativo" type="checkbox" ${at('mob', 'aceite', 'data-at-event="change"')}>Aceitar</label>
+      <label for="radio-nativo">Consulta presencial</label>
+      <input id="radio-nativo" type="radio" value="presencial" ${at('mob', 'atendimento', 'data-at-event="change"')}>`);
+    const checkbox = document.getElementById('checkbox-nativo') as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    document.getElementById('radio-nativo')!.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    await flush();
+    expect(mob.map((event) => event.params['opcao_selecionada_1'])).toEqual(['true', 'false', 'consulta-presencial']);
+  });
+
+  it('clique fora de uma página marcada usa sua própria origem e ignora a tela global de outro MFE', async () => {
+    document.body.insertAdjacentHTML('beforeend', `<button id="fora-da-pagina" ${at('mob', 'voltar')}>Voltar</button>`);
+    document.documentElement.setAttribute('data-at-current-screen', 'outro-mfe|outra-tela');
+    click('#fora-da-pagina');
+    await flush();
+    expect(mob[0]?.params['funcionalidade']).toBe('componentes');
+    expect(mob[0]?.params['tela']).toBe('app-x:saude:card');
+  });
+
+  it('superfície imperativa preserva tela de origem, registra opção física e encerra vínculo no fechamento', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const surfaces = new AutoTrackingSurfaces('mfe-exemplo');
+    stops.push(installDomTracker(document, { ...deps('mfe-exemplo', fed), surfaces }));
+    const modal = document.createElement('ion-modal');
+    modal.innerHTML = '<button id="opcao-fisica" class="opcao">Consulta digital</button><button id="fechar-fisico" class="fechar">Fechar</button>';
+    document.body.appendChild(modal);
+    const dispose = surfaces.register(modal, {
+      screen: { funcionalidade: 'reembolso', tela: 'tipo-documento' },
+      actions: [
+        { selector: '.opcao', id: 'tipo-atendimento', elemento: 'lista', rotulo: 'tipo-atendimento',
+          optionOf: (element) => element.textContent?.trim() ?? null, allowedOptions: ['Consulta digital'] },
+        { selector: '.fechar', id: 'fechar-modal', elemento: 'botao', rotulo: 'fechar-modal' },
+      ],
+    });
+    document.documentElement.setAttribute('data-at-current-screen', 'outro-mfe|outra-tela');
+    click('#opcao-fisica');
+    click('#fechar-fisico');
+    modal.querySelector('.opcao')!.textContent = 'Maria da Silva';
+    click('#opcao-fisica');
+    await flush();
+    expect(fed).toEqual([
+      clickPayload('tipo-documento', 'tipo-atendimento', { elemento: 'lista', opcao_selecionada_1: 'consulta-digital' }),
+      clickPayload('tipo-documento', 'fechar-modal'),
+    ]);
+    dispose();
+    click('#opcao-fisica');
+    await flush();
+    expect(fed).toHaveLength(2);
+    modal.remove();
+  });
+
+  it('output de select com lista em portal envia abertura e opção com a mesma tela de origem', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const surfaces = new AutoTrackingSurfaces('mfe-exemplo');
+    const host = document.createElement('bsad-form-select');
+    host.setAttribute('data-at-ref', encodeTrackingToken({
+      owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'tipo-documento',
+      outputs: [
+        { id: 'tipo-atendimento', event: 'ionChange', selector: 'ion-select.item__select', label: 'tipo-atendimento', output: 'onChange', elemento: 'dropdown' },
+        { id: 'tipo-atendimento', event: 'click', selector: 'ion-select.item__select', label: 'tipo-atendimento', output: 'onChange', elemento: 'dropdown' },
+      ],
+    }));
+    host.innerHTML = '<ion-select class="item__select" id="abrir-lista"></ion-select>';
+    document.querySelector('app-tipo')!.appendChild(host);
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref', surfaces })];
+    click('#abrir-lista');
+
+    const modal = document.createElement('ion-modal');
+    modal.innerHTML = '<button role="checkbox" class="select-sheet__option" id="opcao-lista"><span>Consulta digital</span></button>';
+    document.body.appendChild(modal);
+    const dispose = surfaces.register(modal, {
+      screen: { funcionalidade: 'reembolso', tela: 'tipo-documento' },
+      actions: [{ selector: 'button.select-sheet__option', id: 'tipo-atendimento', elemento: 'dropdown', rotulo: 'tipo-atendimento',
+        optionOf: (element) => element.textContent?.trim() ?? null, allowedOptions: ['Consulta digital'] }],
+    });
+    document.documentElement.setAttribute('data-at-current-screen', 'outro-mfe|outra-tela');
+    click('#opcao-lista span');
+    await flush();
+
+    expect(fed).toEqual([
+      clickPayload('tipo-documento', 'tipo-atendimento', { elemento: 'dropdown' }),
+      clickPayload('tipo-documento', 'tipo-atendimento', { elemento: 'dropdown', opcao_selecionada_1: 'consulta-digital' }),
+    ]);
+    dispose();
+    modal.remove();
+  });
+
+  it('modal aberto por código usa a tela capturada para ações já marcadas no seu template', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const surfaces = new AutoTrackingSurfaces('mfe-exemplo');
+    stops.push(installDomTracker(document, { ...deps('mfe-exemplo', fed), surfaces }));
+    const modal = document.createElement('ion-modal');
+    modal.innerHTML = `<button id="acao-modal" ${at('mfe-exemplo', 'fechar-modal')}>Fechar</button>`;
+    document.body.appendChild(modal);
+    const dispose = surfaces.register(modal, {
+      screen: { funcionalidade: 'reembolso', tela: 'tipo-documento' }, actions: [],
+    });
+    document.documentElement.setAttribute('data-at-current-screen', 'outro-mfe|outra-tela');
+    click('#acao-modal');
+    await flush();
+    expect(fed).toEqual([clickPayload('tipo-documento', 'fechar-modal')]);
+    dispose();
+    modal.remove();
   });
 
   it('envia o rótulo do contrato (o mesmo da planilha) mesmo quando o app altera o texto', async () => {
@@ -294,7 +551,8 @@ describe('runtime: emissão no formato do Builder do time', () => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
     await flush();
     expect(sent[0]?.params['opcao_selecionada_1']).toBeUndefined();
-    expect(warnings).toEqual([expect.stringContaining('fora dos valores comprovados')]);
+    expect(sent).toHaveLength(0);
+    expect(warnings).toEqual([expect.stringContaining('opção pública')]);
     expect(warnings[0]).not.toContain('987654321');
   });
 
@@ -310,8 +568,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     document.querySelector('app-tipo')!.insertAdjacentHTML('beforeend', `<ion-select id="obj" aria-label="Serviço" ${at('mob', 'servico', 'data-at-event="ionChange"')}></ion-select>`);
     document.getElementById('obj')!.dispatchEvent(new CustomEvent('ionChange', { bubbles: true, composed: true, detail: { value: { id: 1 } } }));
     await flush();
-    expect(mob).toHaveLength(1);
-    expect(mob[0]?.params['opcao_selecionada_1']).toBeUndefined();
+    expect(mob).toHaveLength(0);
   });
 
   it('envia o texto da opção carregada quando o valor é um objeto correspondente', async () => {

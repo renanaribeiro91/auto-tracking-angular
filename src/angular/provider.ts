@@ -14,11 +14,24 @@ import {
 import { DOCUMENT } from '@angular/common';
 import { NavigationEnd, Router } from '@angular/router';
 import type { TrackingOptions, TrackingEvent } from '../config.js';
+import { validateEvent } from '../domain/contract/schema.js';
 import { AppIdentityResolver } from '../adapters/runtime/identity-resolver.js';
-import { DomEventTracker, type DomTrackerDeps } from '../adapters/runtime/dom-tracker.js';
+import { AutoTrackingSurfaces, DomEventTracker, type DomTrackerDeps, type TrackingScreen } from '../adapters/runtime/dom-tracker.js';
 import { OWNER_REGISTRY_SYMBOL, TRACKING_DISPATCHER_TOKEN_NAME, TRACKING_OPTIONS_TOKEN_NAME } from './provider.constants.js';
 
 export const TRACKING_OPTIONS = new InjectionToken<TrackingOptions>(TRACKING_OPTIONS_TOKEN_NAME);
+
+function routedSelector(router: Router): string | null {
+  let snapshot = router.routerState?.snapshot.root;
+  let selector: string | null = null;
+  while (snapshot) {
+    const component = snapshot.component as Type<unknown> | null;
+    if (component) selector = reflectComponentType(component)?.selector ?? selector;
+    if (!snapshot.firstChild) break;
+    snapshot = snapshot.firstChild;
+  }
+  return selector;
+}
 
 export class TrackingDispatcher {
   private nativeEnvironment: string | null = null;
@@ -51,6 +64,32 @@ export class TrackingDispatcher {
 
   async send(event: TrackingEvent): Promise<void> {
     await this.options.send(event, this.injector);
+  }
+
+  /** Eventos disparados por código exigem origem e regra explícitas no preset do consumidor. */
+  async track(name: string, origin: TrackingScreen, params: Readonly<Record<string, string>> = {}): Promise<void> {
+    if (!origin?.funcionalidade || !origin.tela || !this.options.preset.schema[name]) {
+      throw new Error('[auto-tracking] evento programático sem tela de origem ou schema');
+    }
+    const screen = { ...origin };
+    const attributes = { ...params };
+    const environment = await this.resolveEnvironment();
+    if (!environment) {
+      console.warn(`[auto-tracking] ${name} não enviado: ambiente não resolvido`);
+      return;
+    }
+    const event: TrackingEvent = { name, params: {
+      ...attributes,
+      ambiente: environment,
+      produto: this.options.product,
+      funcionalidade: screen.funcionalidade,
+      tela: `${environment}:${this.options.product}:${screen.tela}`,
+    } };
+    const validation = validateEvent(event, this.options.preset.schema);
+    if (validation.kind !== 'valid') {
+      throw new Error(`[auto-tracking] ${name} rejeitado pelo schema: ${validation.kind} ${validation.params.join(',')}`);
+    }
+    await this.send(event);
   }
 }
 
@@ -88,6 +127,7 @@ class AutoTrackingLifecycle {
     // nunca exige que o consumidor forneça um módulo ou uma classe específicos.
     const document = inject(DOCUMENT);
     const dispatcher = inject(TRACKING_DISPATCHER);
+    const surfaces = inject(AutoTrackingSurfaces);
     const router = inject(Router, { optional: true });
     const zone = inject(NgZone, { optional: true });
     const destroyRef = inject(DestroyRef);
@@ -108,8 +148,9 @@ class AutoTrackingLifecycle {
         if (this.disposed) return;
         let stopDom: (() => void) | undefined;
         let subscription: { unsubscribe(): void } | undefined;
+        let deactivateSurfaces: (() => void) | undefined;
         try {
-          const tracker = new DomEventTracker(document, this.dependencies(dispatcher));
+          const tracker = new DomEventTracker(document, this.dependencies(dispatcher, surfaces));
           // Eventos e MutationObserver não devem disparar detecção de mudanças
           // do Angular em cada clique/mutação de outro componente/owner.
           const register = (): void => {
@@ -125,11 +166,14 @@ class AutoTrackingLifecycle {
           };
           if (zone) zone.runOutsideAngular(register);
           else register();
+          if (surfaces) deactivateSurfaces = AutoTrackingSurfaces.activate(document, surfaces);
           teardown = () => {
+            deactivateSurfaces?.();
             subscription?.unsubscribe();
             stopDom?.();
           };
         } catch (error) {
+          deactivateSurfaces?.();
           subscription?.unsubscribe();
           stopDom?.();
           console.warn(`[auto-tracking] inicialização isolada: ${String(error)}`);
@@ -165,13 +209,14 @@ class AutoTrackingLifecycle {
     });
   }
 
-  private dependencies(dispatcher: TrackingDispatcher): DomTrackerDeps {
+  private dependencies(dispatcher: TrackingDispatcher, surfaces: AutoTrackingSurfaces): DomTrackerDeps {
     return {
       root: this.options.root,
       owner: this.options.owner,
       product: this.options.product,
       schema: this.options.preset.schema,
       mode: this.options.mode ?? 'classic',
+      surfaces,
       resolveEnvironment: () => dispatcher.resolveEnvironment(),
       send: (event) => dispatcher.send(event),
       warn: (message) => console.warn(message),
@@ -185,7 +230,7 @@ class AutoTrackingLifecycle {
     this.pendingTimers.clear();
     this.lastUrl = event.urlAfterRedirects;
     try {
-      const selector = this.routedSelector(router);
+      const selector = routedSelector(router);
       if (selector) this.scheduleScreenView(tracker, selector);
     } catch (error) {
       console.warn(`[auto-tracking] navegação não instrumentada: ${String(error)}`);
@@ -207,13 +252,6 @@ class AutoTrackingLifecycle {
       this.pendingTimers.add(timer);
     };
     schedule(0, true);
-  }
-
-  private routedSelector(router: Router): string | null {
-    let snapshot = router.routerState.snapshot.root;
-    while (snapshot.firstChild) snapshot = snapshot.firstChild;
-    const component = snapshot.component as Type<unknown> | null;
-    return component ? reflectComponentType(component)?.selector ?? null : null;
   }
 
   private static ownerRegistry(document: Document): Map<string, OwnerGroup> {
@@ -239,6 +277,14 @@ class AutoTrackingLifecycle {
 export function provideAutoTracking(options: TrackingOptions): EnvironmentProviders {
   return makeEnvironmentProviders([
     { provide: TRACKING_OPTIONS, useValue: options },
+    { provide: AutoTrackingSurfaces, useFactory: () => {
+      const document = inject(DOCUMENT);
+      const router = inject(Router, { optional: true });
+      return new AutoTrackingSurfaces(options.owner, () => {
+        const selector = router ? routedSelector(router) : null;
+        return selector ? DomEventTracker.screenForHost(document, selector, options.mode ?? 'classic', options.owner) : null;
+      });
+    } },
     { provide: TRACKING_DISPATCHER, useFactory: () => new TrackingDispatcher(options, inject(Injector)) },
     provideEnvironmentInitializer(() => new AutoTrackingLifecycle(options).start()),
   ]);

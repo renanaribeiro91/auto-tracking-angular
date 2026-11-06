@@ -23,7 +23,7 @@ Isso não equivale a certificar o comportamento de todo componente externo. Even
 
 ## Instalação e desenvolvimento local
 
-Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `2.1.1` mantém cache, relatórios e planilhas locais sem afetar o `pre-commit` automático e valida fontes sem depender desses artefatos. A `2.1.0` lê no clique o texto dinâmico seguro (menus do serviço) e nunca usa título de tela ou prefixo de componente como rótulo; a `2.0.0` passou a enviar o mesmo rótulo da planilha (sem `(not set)`), não importa pacotes do Capacitor no runtime e instala hooks git nativos (`auto-tracking hooks install`). Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
+Para instalar uma versão publicada, use `npm install auto-tracking-angular`. A versão `2.2.0` remove do grafo do CLI as dependências XLSX vulneráveis (`exceljs-hardened`), só tagueia interações efetivamente usadas e nunca envia nome de pessoa como opção selecionada. A `2.1.1` mantém cache, relatórios e planilhas locais sem afetar o `pre-commit` automático e valida fontes sem depender desses artefatos. A `2.1.0` lê no clique o texto dinâmico seguro (menus do serviço) e nunca usa título de tela ou prefixo de componente como rótulo; a `2.0.0` passou a enviar o mesmo rótulo da planilha (sem `(not set)`), não importa pacotes do Capacitor no runtime e instala hooks git nativos (`auto-tracking hooks install`). Use `npm link` apenas como opção de desenvolvimento local, nunca como dependência de CI.
 
 Na pasta da biblioteca:
 
@@ -135,6 +135,8 @@ npm run tracking -- --json       # saída estruturada para automação
 ```
 
 Códigos de saída: `0` válido, `1` pendências estruturais ou marcações/evidências desatualizadas, `2` erro operacional/configuração. A mensagem de execução sem mudanças indica que marcações e evidências estão consistentes; não significa que eventos fora do escopo estejam cobertos.
+
+`verify` compara as fontes atuais, o JSON determinístico e o conteúdo das células da planilha: ausência, linha duplicada, interação removida ou valor divergente impede aprovação. `tracking` recompõe os artefatos divergentes e preserva os IDs existentes. O hook `pre-push` mantém a verificação das fontes commitadas, pois as evidências são locais e não são transportadas pelo Git.
 
 ## Artefatos gerados
 

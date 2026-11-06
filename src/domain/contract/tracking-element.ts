@@ -26,4 +26,8 @@ export interface TrackingElement {
    * `rotulo`/`label` ficam como fallback. Voltar/fechar do componente nunca entram.
    */
   readonly rotuloDinamico?: readonly string[];
+  /** Regras completas da superfície TS; impede usar ref anterior a uma alteração. */
+  readonly surfaceContract?: string;
+  /** O gesto só pode sair com a tela capturada no owner ou provada pela rota ancestral. */
+  readonly requireOrigin?: boolean;
 }

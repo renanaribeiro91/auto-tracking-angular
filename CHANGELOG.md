@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.2.0 — 2026-11-06
+
+### Segurança (SCA)
+
+- `exceljs` 4.4.0 substituído por `exceljs-hardened@5.1.0` (MIT), somente no CLI. A árvore distribuída não contém mais `exceljs@4.4.0`, `unzipper@0.10.14` nem `bluebird@3.4.7`.
+- Leitura e escrita de XLSX com limites de ZIP/descompressão/PNG, validação de caminhos e links, e branding restrito à raiz real do consumidor (inclusive symlink).
+
+### Tagueamento
+
+- Só interações efetivamente usadas recebem eventos; metadados de componentes, métodos e superfícies sem uso são removidos sem tocar em código de negócio.
+- Superfícies criadas por TypeScript (`defineTrackingSurface`/`AutoTrackingSurfaces`) usam a tela visível que apresenta o gesto; portal sem origem verificável não recebe tela inventada.
+- Opção selecionada de item de lista: um campo `nome<X>`/`descricao<X>` só é enviado quando o tipo declarado do item prova que a pessoa física é outro sujeito (`{ nomeX, nomeY, cpfX }` envia apenas `nomeY`). Sem prova, nada é enviado e o CLI emite diagnóstico.
+- Planilha nomeia o valor escolhido pelo campo comprovado (`[nome-especialidade-selecionado]`); campo genérico usa o objeto do handler (`selecionarSala` + `name` → `[nome-sala-selecionado]`).
+- `verify` compara o JSON e as células reais do XLSX. Regere com `npx auto-tracking` após atualizar.
+
 ## 2.1.1 — 2026-11-04
 
 - `verify` e `pre-push` analisam o código atual sem depender de relatório, planilha ou cache anteriores; o push bloqueia fontes relevantes ainda não commitadas, incluindo templates novos.

@@ -2,14 +2,18 @@
 import { createHash } from 'node:crypto';
 import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
-import { numericSelectionMethods, staticListLabels } from './selection-provenance.js';
+import { listItemFields, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
 import { ComponentScreenResolver } from './component-screen-resolver.js';
 import type { ComponentInfo, ProjectIndex } from './ports/project-index.js';
 import { ScreenIdentityResolver } from './screen-identity-resolver.js';
 import { ENGINE_VERSION } from './constants.js';
+import { tagSurface, untagSurface } from './surface-tagger.js';
+import { resolveProductionUsage } from './production-usage.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
+import { slug } from '../../domain/contract/slug.js';
+import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
 import type { TrackingPipelineDependencies } from './ports/tracking-pipeline-dependencies.js';
@@ -81,7 +85,19 @@ export class TrackingPipeline {
       const ws = workspace?.projects.get(project.angularProject);
       if (!ws) throw new PipelineError(`projeto '${project.angularProject}' não existe no angular.json`);
       const scanRoot = this.scanRootFor(consumerRoot, project.tsconfig, ws.sourceRoot);
-      const index: ProjectIndex = this.projectIndexer.buildProjectIndex(scanRoot);
+      const original = new Map<string, string>();
+      const current = new Map<string, string>();
+      let index: ProjectIndex = this.projectIndexer.buildProjectIndex(scanRoot);
+      for (const file of index.trackingFiles ?? []) {
+        const source = this.fileSystem.readText(file);
+        const reconciled = this.projectIndexer.reconcileTrackingSource?.(source, file) ?? source;
+        if (reconciled !== source) { original.set(file, source); current.set(file, reconciled); }
+      }
+      if (current.size) index = this.projectIndexer.buildProjectIndex(scanRoot, current);
+      const usage = resolveProductionUsage(index, config.root);
+      diagnostics.push(...usage.diagnostics.map((diagnostic) => ({ ...diagnostic, arquivo: this.relativePath(consumerRoot, diagnostic.arquivo) })));
+      for (const error of index.surfaceErrors ?? []) diagnostics.push({ code: 'SURFACE_DECLARATION_UNPROVEN',
+        arquivo: this.relativePath(consumerRoot, error.file), linha: error.line, mensagem: error.message });
       for (const route of index.ambiguousRoutes) {
         diagnostics.push({
           code: 'ROUTED_COMPONENT_AMBIGUOUS',
@@ -116,7 +132,7 @@ export class TrackingPipeline {
         throw new PipelineError(`identidade de tela ambígua '${unresolvedCollision[0]}' em ${unresolvedCollision[1].map((component) => this.relativePath(consumerRoot, component.tsFile)).join(', ')}`);
       }
       const identity = (component: ComponentInfo) => identityFor(component, refineOf.get(component) ?? 0);
-      const screensOf = this.componentScreenResolver.resolve(index, identity);
+      const screensOf = this.componentScreenResolver.resolve(index, identity, usage.methods);
       if (index.providerCalls === 0) {
         diagnostics.push({ code: 'BOOTSTRAP_PROVIDER_MISSING', arquivo: this.relativePath(consumerRoot, scanRoot), linha: 1, mensagem: 'nenhum provideAutoTracking(<config>.runtime) no bootstrap: marcações não emitem em runtime' });
       }
@@ -126,7 +142,7 @@ export class TrackingPipeline {
         .map((c) => {
           if (c.templateFile && this.fileSystem.exists(c.templateFile)) return { c, file: c.templateFile, inline: null };
           if (c.inline) return { c, file: c.tsFile, inline: c.inline };
-          if (c.inlineTemplate) {
+          if (c.inlineTemplate && usage.components.has(c.key)) {
             diagnostics.push({ code: 'INLINE_TEMPLATE_INTERPOLATED', arquivo: this.relativePath(consumerRoot, c.tsFile), linha: 1, mensagem: `${c.className} monta o template com \${}; não editável com segurança` });
           }
           return null;
@@ -135,13 +151,16 @@ export class TrackingPipeline {
         // por arquivo, do fim para o início: editar um literal não desloca os anteriores
         .sort((a, b) => a.file.localeCompare(b.file) || (b.inline?.start ?? 0) - (a.inline?.start ?? 0));
 
-      const original = new Map<string, string>();
-      const current = new Map<string, string>();
       for (const t of targets) if (!original.has(t.file)) original.set(t.file, this.fileSystem.readText(t.file));
-      for (const [f, text] of original) current.set(f, text);
+      for (const [f, text] of original) if (!current.has(f)) current.set(f, text);
 
       // ids existentes são reservados antes de gerar novos, para que a ordem de arquivos não troque ids
       const usedIds = new Set<string>(claimedIds);
+      // Superfícies têm IDs públicos determinísticos; um HTML novo não pode tomá-los.
+      for (const surface of index.surfaces ?? []) {
+        if (!usage.surfaces.has(surface.componentKey)) continue;
+        for (const action of surface.definition.actions) usedIds.add(`${slug(surface.definition.id)}-${slug(action.id)}`);
+      }
       for (const text of original.values()) for (const m of text.matchAll(/data-at-(?:id|screen)=["']([^"']+)["']/g)) usedIds.add(m[1]!);
       for (const text of original.values()) {
         for (const match of text.matchAll(/data-at-(?:overlay-)?outputs=["']([^"']+)["']/g)) {
@@ -167,8 +186,9 @@ export class TrackingPipeline {
         // no literal inline, só a aspa delimitadora vem escapada: desescapa para o parser e reescapa ao gravar
         const quote = t.inline?.quote;
         const html = t.inline ? text.slice(t.inline.start, t.inline.end).split('\\' + quote).join(quote!) : text;
-        templates++;
-        const result = this.tagger.tagTemplate(html, {
+        const active = usage.components.has(t.c.key);
+        if (active) templates++;
+        const result = active ? this.tagger.tagTemplate(html, {
           owner: config.owner,
           relFile: this.relativePath(consumerRoot, t.file),
           ...identity(t.c),
@@ -176,20 +196,49 @@ export class TrackingPipeline {
           catalog,
           selectionMethods: numericSelectionMethods(t.c, index.components),
           listLabels: staticListLabels(t.c),
+          listItemFields: listItemFields(t.c),
           usedIds,
           claimedIds,
           attrQuote: t.inline?.quote === '"' ? "'" : '"',
           lineOffset: t.inline?.line ?? 1,
           mode: config.mode,
-        });
+        }) : { html: this.tagger.untagTemplate(html), entries: [], diagnostics: [] };
         // componente raiz (casca do app) aparece em todas as telas
         const resolved = screensOf(t.c);
-        const telas = resolved.length === 0 && t.c.def.selectors.includes(config.root) ? ['*'] : resolved;
-        entries.push(...result.entries.map((e) => ({ ...e, telas: e.evento === 'screen_view' ? [`${e.funcionalidade}:${e.tela}`] : telas })));
+        const telas = resolved.length ? resolved : [t.c.def.selectors.includes(config.root) ? '*' : ORIGIN_SCREEN];
+        entries.push(...result.entries.map((e) => ({ ...e,
+          telas: e.evento === 'screen_view' ? [`${e.funcionalidade}:${e.tela}`] : telas,
+          vinculo_tela: e.evento === 'screen_view' || index.routedComponents.has(t.c.key) ? 'rota' as const : 'origem' as const,
+        })));
         diagnostics.push(...result.diagnostics);
         if (result.html !== html) {
           const body = t.inline ? result.html.split(quote!).join('\\' + quote) : result.html;
           current.set(t.file, t.inline ? text.slice(0, t.inline.start) + body + text.slice(t.inline.end) : body);
+        }
+      }
+      for (const surface of index.surfaces ?? []) {
+        if (!original.has(surface.file)) {
+          const source = this.fileSystem.readText(surface.file);
+          original.set(surface.file, source);
+          current.set(surface.file, source);
+        }
+        if (!usage.surfaces.has(surface.componentKey)) {
+          current.set(surface.file, current.get(surface.file)!.split(surface.text).join(untagSurface(surface)));
+          continue;
+        }
+        try {
+          const component = index.components.find((component) => component.key === surface.componentKey)!;
+          const resolved = screensOf(component);
+          const tagged = tagSurface(surface, config.owner, identity(component), resolved.length ? resolved : [ORIGIN_SCREEN],
+            this.relativePath(consumerRoot, surface.file), claimedIds);
+          const source = current.get(surface.file)!;
+          const offset = source.indexOf(surface.text);
+          if (offset < 0 || source.indexOf(surface.text, offset + surface.text.length) >= 0) throw new Error('declaração sem localização única');
+          current.set(surface.file, source.slice(0, offset) + tagged.text + source.slice(offset + surface.text.length));
+          entries.push(...tagged.entries.map((entry) => ({ ...entry, vinculo_tela: 'origem' as const })));
+        } catch (error) {
+          diagnostics.push({ code: 'SURFACE_DECLARATION_UNPROVEN', arquivo: this.relativePath(consumerRoot, surface.file),
+            linha: surface.line, mensagem: String(error) });
         }
       }
       for (const [file, before] of original) {
@@ -198,6 +247,16 @@ export class TrackingPipeline {
       }
     }
 
+    for (const entry of entries) {
+      const validReferences = entry.telas.length && entry.telas.every((screen) =>
+        screen === '*' || screen === ORIGIN_SCREEN || isStaticScreenReference(screen));
+      const requiresOrigin = entry.vinculo_tela === 'origem';
+      const validContract = config.mode !== 'ref' || !requiresOrigin || (entry.ref && decodeTrackingToken(entry.ref)?.requireOrigin === true);
+      if (!validReferences || !entry.vinculo_tela || !validContract) diagnostics.push({
+        code: 'TRACKING_SCREEN_BINDING_MISSING', arquivo: entry.arquivo, linha: entry.linha,
+        mensagem: `interação '${entry.id}' sem contrato de vínculo com a tela de origem`,
+      });
+    }
     const relatorio = JSON.stringify({ entries, diagnostics }, null, 2) + '\n';
     return { config, paths, changes, entries, diagnostics, relatorio, templates };
   }
@@ -230,7 +289,7 @@ export class TrackingPipeline {
       templates: r.templates,
       interacoes: r.entries.filter((e) => e.evento === 'click').length,
       // módulos como na planilha: módulo de cada tela onde há interação, mais os componentes globais
-      modulos: new Set(r.entries.flatMap((e) => e.telas.filter((t) => t !== '*').map((t) => t.split(':')[0]!))).size,
+      modulos: new Set(r.entries.flatMap((e) => e.telas.filter(isStaticScreenReference).map((t) => t.split(':')[0]!))).size,
       telas: r.entries.filter((e) => e.evento === 'screen_view').length,
       diagnosticos: r.diagnostics.length,
     };

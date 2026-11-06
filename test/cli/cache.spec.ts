@@ -1,3 +1,4 @@
+import { loadWorkbookProvider } from '../../src/adapters/reports/excel-workbook.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -29,6 +30,43 @@ describe('CLI: cache conserva prova e status', () => {
       const routes = [{ path: '', component: App }]; const providers = [provideAutoTracking(config.runtime)];`);
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('verify rejeita JSON e células adulterados; apply recompõe o par sem reescrever fontes e depois é idempotente', async () => {
+    write('src/app.html', '<button (click)="salvar()">Salvar</button>');
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
+    const reportFile = path.join(root, '.auto-tracking/relatorio.json');
+    const workbookFile = path.join(root, '.auto-tracking/evidencia-tagueamento.xlsx');
+    const source = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
+    const originalReport = fs.readFileSync(reportFile, 'utf8');
+    const editedReport = JSON.parse(originalReport);
+    editedReport.entries[0].id = 'id-adulterado';
+    fs.writeFileSync(reportFile, JSON.stringify(editedReport));
+    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
+      pendencias: expect.arrayContaining([expect.stringContaining('relatório ausente ou divergente')]) });
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
+    expect(fs.readFileSync(reportFile, 'utf8')).toBe(originalReport);
+    const ExcelJS = await loadWorkbookProvider();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(workbookFile);
+    const signature = workbook.description;
+    const sheet = workbook.worksheets[1]!;
+    sheet.getCell('A3').value = 'id-adulterado';
+    sheet.getCell('H3').value = 'rotulo-adulterado';
+    await workbook.xlsx.writeFile(workbookFile);
+    const stateFile = path.join(root, '.auto-tracking/cache/estado.json');
+    const stateBefore = fs.readFileSync(stateFile, 'utf8');
+    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
+      pendencias: expect.arrayContaining([expect.stringContaining('planilha ausente ou divergente')]) });
+    expect(fs.readFileSync(stateFile, 'utf8')).toBe(stateBefore);
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
+    await workbook.xlsx.readFile(workbookFile);
+    expect(workbook.description).toBe(signature);
+    expect(workbook.worksheets[1]!.getCell('A3').value).not.toBe('id-adulterado');
+    expect(workbook.worksheets[1]!.getCell('H3').value).not.toBe('rotulo-adulterado');
+    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(source);
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0, pendencias: [] });
+    expect(cli()).toMatchObject({ status: 'valid', exit: 0, arquivosEscritos: 0, cache: 'hit' });
+  });
 
   it('reanalisa alterações nas marcações e preserva um ID existente explícito', () => {
     write('src/app.html', '<button (click)="salvar()">Salvar</button>');
@@ -105,12 +143,29 @@ describe('CLI: cache conserva prova e status', () => {
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('projects:', 'branding: {}, projects:'));
     write('src/app.html', '<button (click)="salvar()">Salvar</button>');
     expect(cli().status).toBe('valid');
-    const ExcelJS = await import('exceljs');
+    const ExcelJS = await loadWorkbookProvider();
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(path.join(root, '.auto-tracking/evidencia-tagueamento.xlsx'));
     expect(workbook.getWorksheet('Resumo')?.getCell('B1').font.color?.argb).toBe('FF284B63');
     expect(workbook.model.media).toHaveLength(0);
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 0, cache: 'hit' });
+  });
+
+  it.each(['relative', 'symlink'])('recusa imagem externa por %s antes de modificar fontes', (mode) => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'tracking-external-image-'));
+    try {
+      write('src/app.html', '<button (click)="salvar()">Salvar</button>');
+      const image = path.join(external, 'logo.png');
+      fs.copyFileSync(path.resolve('test/fixtures/watermark.png'), image);
+      if (mode === 'symlink') fs.symlinkSync(image, path.join(root, 'logo.png'));
+      const asset = mode === 'symlink' ? 'logo.png' : path.relative(root, image).split(path.sep).join('/');
+      const file = path.join(root, 'auto-tracking.config.ts');
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('projects:', `branding: { logoPng: '${asset}' }, projects:`));
+      const before = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
+      expect(cli()).toMatchObject({ exit: 2, status: 'error' });
+      expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(before);
+      expect(fs.existsSync(path.join(root, '.auto-tracking/relatorio.json'))).toBe(false);
+    } finally { fs.rmSync(external, { recursive: true, force: true }); }
   });
 
   it('rejeita cor inválida antes de escrever marcações', () => {
@@ -214,7 +269,8 @@ describe('CLI: cache conserva prova e status', () => {
     const report = fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8');
     const template = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
     fs.rmSync(output, { recursive: true, force: true });
-    expect(cli('verify').status).toBe('valid');
+    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
+      pendencias: expect.arrayContaining([expect.stringContaining('relatório ausente'), expect.stringContaining('planilha ausente')]) });
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 3 });
     expect(fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8')).toBe(report);
     expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(template);

@@ -1,6 +1,51 @@
 # Integração e validação em projetos Angular
 
-O consumidor é responsável pelo preset, pelas imagens da planilha, pelo adaptador de envio e pelo registro do provider. A biblioteca não conhece o nome da organização nem altera o TypeScript de telas para criar analytics.
+O consumidor é responsável pelo preset, pelas imagens da planilha, pelo adaptador de envio e pelo registro do provider. A biblioteca não conhece o nome da organização e lê as declarações de rastreamento por AST, sem executar o TypeScript do consumidor.
+
+## Opções em portais e modais criados por código
+
+`provideAutoTracking` disponibiliza `AutoTrackingSurfaces` por injeção. Declare as ações com `defineTrackingSurface` dentro do método que cria o portal (componente, serviço ou effect). O CLI grava a `ref` no próprio objeto TypeScript e inclui as mesmas ações no JSON e na planilha; não há manifesto adicional nem import de relatório no app.
+
+```ts
+import { AutoTrackingSurfaces, defineTrackingSurface } from 'auto-tracking-angular';
+
+private readonly surfaces = inject(AutoTrackingSurfaces);
+
+async openOptions() {
+  const origin = this.surfaces.capture(); // antes do primeiro await
+  const definition = defineTrackingSurface({
+    id: 'opcoes-atendimento',
+    actions: [
+      {
+        id: 'selecionar', selector: '[role="option"]',
+        elemento: 'lista', rotulo: 'tipo-atendimento',
+        optionAttribute: 'data-public-option', allowedOptions: ['consulta', 'exame'],
+      },
+      { id: 'fechar', selector: '[aria-label="Fechar"]', elemento: 'botao', rotulo: 'fechar' },
+    ],
+  });
+  const modal = await modalController.create({ component: OptionsComponent });
+  const detach = this.surfaces.attach(modal, definition, origin);
+  try {
+    await modal.present();
+    return (await modal.onDidDismiss()).data;
+  } finally {
+    detach();
+  }
+}
+```
+
+Ao usar injeção pelo construtor com tipo anulável, o CLI reconcilia o import de valor e o token explícito: `@Inject(AutoTrackingSurfaces) @Optional() private readonly tracking: AutoTrackingSurfaces | null = null`. Ele reutiliza imports e aliases existentes, sem duplicar decorators. A união com `null` sozinha não fornece um token Angular (NG2003). `inject(AutoTrackingSurfaces, { optional: true })` também preserva o token explícito.
+
+As regras de cada ação, incluindo opções permitidas e atributo de seleção, fazem parte da referência gerada. Alterá-las exige nova execução do CLI antes de recompilar o consumidor; o runtime rejeita a declaração que ainda usa uma referência anterior.
+
+Execute `auto-tracking apply` após mudar a declaração. IDs, seletores, rótulos e opções devem ser literais e vir do contrato público do componente, sem texto livre, índice visual ou dados pessoais. Use `event: 'change'` para controles nativos e `event: 'ionChange'` para controles que publicam esse evento; o clique de abertura de um select continua separado da escolha. Para listas em portais, o atributo público e a lista permitida identificam a opção clicada. A biblioteca não contém seletores de design systems específicos.
+
+A raiz pública do portal é necessária: a biblioteca não associa overlays por ordem de abertura nem por classe global. `capture()` obtém a identidade marcada na página da rota do owner atual, desconsiderando páginas ocultas mantidas pelo Ionic. A captura preserva funcionalidade, tela e ID mesmo que a rota mude enquanto o modal estiver aberto. Falta de origem, declaração inválida ou `ref` desatualizada gera diagnóstico e não interrompe o fluxo de negócio. Não há fallback para uma tela global ou `not set`.
+
+Se o template do modal já contém ações marcadas pelo CLI, registre apenas a origem: `surfaces.register(modal, { screen: origin, actions: [] })`, após confirmar que `origin` existe. As ações mantêm os IDs e rótulos do template e recebem a origem capturada. Encerre o vínculo no fechamento.
+
+A abertura programática não é um clique físico. Para registrá-la, defina, por exemplo, `modal_open` no schema do preset e chame `tracking.track('modal_open', origin, { modal: 'opcoes-atendimento' })` depois de `present()`, usando `TRACKING_DISPATCHER`. As ações declaradas por `defineTrackingSurface` entram na evidência estática; eventos programáticos arbitrários seguem o schema do consumidor e não são inferidos como ações de template.
 
 ## O que configurar
 

@@ -1,4 +1,4 @@
-import { decodeTrackingToken, TrackingTokenCache } from '../../src/domain/contract/tracking-token.js';
+import { decodeTrackingToken, pack, unpack, TrackingTokenCache } from '../../src/domain/contract/tracking-token.js';
 import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
 import type { TrackingElement } from '../../src/domain/contract/tracking-element.js';
 import { deflateRaw } from 'pako';
@@ -21,11 +21,42 @@ describe('token autocontido: codec versionado e sem estado externo', () => {
     expect(first.length).toBeLessThan(450);
   });
 
+  it('preserva a classificação dos outputs e portais, mantendo tokens anteriores legíveis', () => {
+    const outputs = contract.outputs!.map((binding) => ({ ...binding, elemento: 'dropdown' }));
+    const changed = { ...contract, outputs, overlayOutputs: outputs };
+    expect(decodeTrackingToken(encodeTrackingToken(changed))).toEqual(changed);
+    expect(decodeTrackingToken(encodeTrackingToken(contract))).toEqual(contract);
+    expect(() => encodeTrackingToken({ ...contract, outputs: [{ ...outputs[0]!, elemento: ' ' }] }))
+      .toThrow('contrato de tracking inválido');
+  });
+
   it('outra identidade gera token diferente; Unicode e opções continuam intactos', () => {
     const changed: TrackingElement = { ...contract, click: { ...contract.click!, rotulo: 'exclusão de João' } };
     const a = encodeTrackingToken(changed);
     expect(a).not.toBe(encodeTrackingToken(contract));
     expect(decodeTrackingToken(a)).toEqual(changed);
+  });
+
+  it('preserva o contrato completo da superfície sem alterar tokens anteriores', () => {
+    const surface = { ...contract, surfaceContract: '["modal",[]]' };
+    expect(decodeTrackingToken(encodeTrackingToken(surface))).toEqual(surface);
+    const dynamic = { ...surface, rotulos: ['continuar'], rotuloDinamico: ['menu'] };
+    expect(decodeTrackingToken(encodeTrackingToken(dynamic))).toEqual(dynamic);
+    expect(() => encodeTrackingToken({ ...contract, surfaceContract: '' })).toThrow('contrato de tracking inválido');
+  });
+
+  it('preserva requisito de origem no slot opcional sem invalidar os contratos anteriores', () => {
+    expect(pack(contract)).toHaveLength(7);
+    const required = { ...contract, requireOrigin: true };
+    expect(pack(required)).toHaveLength(11);
+    expect(pack(required)[9]).toBe(0);
+    expect(decodeTrackingToken(encodeTrackingToken(required))).toEqual(required);
+    const complete = { ...required, surfaceContract: '["modal",[]]', rotulos: ['continuar'], rotuloDinamico: ['menu'] };
+    expect(decodeTrackingToken(encodeTrackingToken(complete))).toEqual(complete);
+    expect(unpack([...pack(contract), 0, 0, 0, 0])).toBeNull();
+    expect(unpack([...pack(contract), 0, 0, 0, true])).toBeNull();
+    expect(unpack([...pack(contract), 0, 0, '', 1])).toBeNull();
+    expect(unpack([...pack(contract), 0, 0, 0])).toBeNull();
   });
 
   it('falha fechada para versão, base64 inválido, JSON inválido, tamanho e valores malformados', () => {
