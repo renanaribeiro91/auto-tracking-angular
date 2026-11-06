@@ -42,6 +42,7 @@ describe('hooks git: bloco gerenciado pela lib', () => {
 });
 
 describe('hooks git: fluxo real de commit e push', () => {
+  const libVersion = (JSON.parse(fs.readFileSync('package.json', 'utf8')) as { version: string }).version;
   let root: string;
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   const commit = (message: string) => spawnSync('git', ['commit', '-m', message], { cwd: root, encoding: 'utf8' });
@@ -60,7 +61,7 @@ describe('hooks git: fluxo real de commit e push', () => {
     git('config', 'core.hooksPath', '.githooks');
     write('angular.json', JSON.stringify({ projects: { app: { sourceRoot: 'src' } } }));
     write('tsconfig.app.json', '{}');
-    write('package.json', JSON.stringify({ dependencies: {} }));
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': `^${libVersion}` } }));
     write('auto-tracking.config.ts', `export default defineAutoTrackingProject({
       projects: [{ angularProject: 'app', tsconfig: 'tsconfig.app.json' }],
       runtime: { owner: 'app', root: 'app-root', product: 'saude', preset: examplePreset, mode: 'ref', send: () => {} }
@@ -73,6 +74,23 @@ describe('hooks git: fluxo real de commit e push', () => {
     fs.symlinkSync(path.resolve('.'), path.join(root, 'node_modules', 'auto-tracking-angular'), 'dir');
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('bloqueia commit e push quando a lib instalada difere da declarada ou da travada no lock', () => {
+    expect(cli('hooks', 'install').status).toBe(0);
+    write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button>');
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': '^99.0.0' } }));
+    git('add', '-A');
+    const declared = commit('feat: tela');
+    expect(declared.status).not.toBe(0);
+    expect(declared.stderr).toContain(`lib instalada (${libVersion}) difere da declarada (^99.0.0)`);
+    expect(git('show', ':src/app.html')).not.toContain('data-at-ref='); // nada gerado pela versão errada
+
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': `^${libVersion}` } }));
+    write('package-lock.json', JSON.stringify({ packages: { 'node_modules/auto-tracking-angular': { version: '0.0.1' } } }));
+    git('add', '-A');
+    expect(commit('feat: tela').stderr).toContain('difere da declarada (0.0.1)');
+    expect(spawnSync('sh', ['.githooks/pre-push'], { cwd: root, encoding: 'utf8' }).status).not.toBe(0);
+  });
 
   it('instala, gera no commit, deixa commit sem mudança intacto e protege edição não preparada e o push', () => {
     const install = cli('hooks', 'install');

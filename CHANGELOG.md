@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.2 — 2026-11-06
+
+### Hooks
+
+- `pre-commit` e `pre-push` bloqueiam quando a lib em `node_modules` não é a travada no `package-lock.json` ou não satisfaz o `package.json` (inclusive build local `-dev`): o tagueamento nunca é gerado nem verificado por outra versão. A conferência fica no próprio bloco do hook, então vale mesmo com uma lib antiga instalada. Atualize o bloco com `npx auto-tracking hooks install`.
+
 ## 2.2.1 — 2026-11-06
 
 ### Overlays criados por código

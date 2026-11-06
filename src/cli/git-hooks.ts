@@ -17,6 +17,26 @@ const HOOK_DESCRIPTION: Readonly<Record<GitHookName, string>> = {
 };
 
 /**
+ * Conferência de versão embutida no próprio hook (não depende da lib instalada, que pode ser a antiga):
+ * a lib em node_modules tem de ser a travada no package-lock.json e satisfazer o package.json.
+ * Sem aspas simples: vai dentro de `node -e '...'`.
+ */
+const VERSION_CHECK_SCRIPT = [
+  'const fs=require("fs"),p=require("path"),r=process.argv[1],nome="auto-tracking-angular";',
+  'const ler=(f)=>{try{return JSON.parse(fs.readFileSync(p.join(r,f),"utf8"))}catch{return null}};',
+  'const inst=(ler("node_modules/"+nome+"/package.json")||{}).version||"";',
+  'const lock=ler("package-lock.json"),travado=((lock&&lock.packages&&lock.packages["node_modules/"+nome])||{}).version||"";',
+  'const pkg=ler("package.json")||{},faixa=String((pkg.dependencies||{})[nome]||(pkg.devDependencies||{})[nome]||"").trim();',
+  'const n=(v)=>(/^(\\d+)\\.(\\d+)\\.(\\d+)/.exec(v)||[]).slice(1).map(Number),cmp=(a,b)=>a[0]-b[0]||a[1]-b[1]||a[2]-b[2];',
+  // shortcut: aceita só x.y.z, ^x.y.z, ~x.y.z e >=x.y.z; outra forma bloqueia (amplie se um app precisar).
+  'const m=/^(\\^|~|>=)?v?(\\d+\\.\\d+\\.\\d+(?:-[\\w.]+)?)$/.exec(faixa),i=n(inst);let ok=!!(inst&&m);',
+  'if(ok){const b=n(m[2]),op=m[1]||"";ok=op===">="?cmp(i,b)>=0:!op?inst===m[2]:cmp(i,b)>=0&&i[0]===b[0]&&(op==="~"||b[0]===0?i[1]===b[1]:true);',
+  'if(inst.includes("-")&&inst!==m[2])ok=false;}',
+  'if(ok&&travado&&travado!==inst)ok=false;',
+  'if(!ok){console.error("[auto-tracking] lib instalada ("+(inst||"nenhuma")+") difere da declarada ("+(travado||faixa||"nenhuma")+"): execute npm install antes de continuar.");process.exit(1)}',
+].join('');
+
+/**
  * Bloco shell do hook, organizado em funções nomeadas para quem abrir o
  * arquivo entender o que roda. `project` é o caminho do app relativo à raiz
  * git ('' quando coincidem), para monorepos. POSIX sh: roda no Git Bash do
@@ -50,6 +70,8 @@ export function hookBlock(hook: GitHookName, project = ''): string {
     '    echo "[auto-tracking] biblioteca não instalada: execute npm install." >&2',
     '    return 1',
     '  fi',
+    '  # Tagueamento gerado por versão diferente da declarada no commit não é garantido: bloqueia.',
+    `  node -e '${VERSION_CHECK_SCRIPT}' "$auto_tracking_projeto" || return 1`,
     '  node "$auto_tracking_cli" hook "$1" --root "$auto_tracking_projeto"',
     '}',
     '',
