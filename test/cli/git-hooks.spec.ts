@@ -75,7 +75,7 @@ describe('hooks git: fluxo real de commit e push', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  it('bloqueia commit e push quando a lib instalada difere da declarada ou da travada no lock', () => {
+  it('bloqueia commit e push quando a lib instalada difere da declarada; lockfile não é fonte nem trava', () => {
     expect(cli('hooks', 'install').status).toBe(0);
     write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button>');
     write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': '^99.0.0' } }));
@@ -85,11 +85,14 @@ describe('hooks git: fluxo real de commit e push', () => {
     expect(declared.stderr).toContain(`lib instalada (${libVersion}) difere da declarada (^99.0.0)`);
     expect(git('show', ':src/app.html')).not.toContain('data-at-ref='); // nada gerado pela versão errada
 
-    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': `^${libVersion}` } }));
-    write('package-lock.json', JSON.stringify({ packages: { 'node_modules/auto-tracking-angular': { version: '0.0.1' } } }));
-    git('add', '-A');
-    expect(commit('feat: tela').stderr).toContain('difere da declarada (0.0.1)');
     expect(spawnSync('sh', ['.githooks/pre-push'], { cwd: root, encoding: 'utf8' }).status).not.toBe(0);
+
+    // Lockfile não é fonte nem trava: app que não versiona o lock commita e faz push normalmente.
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': `^${libVersion}` } }));
+    git('add', '-A');
+    expect(commit('feat: tela').status).toBe(0);
+    write('package-lock.json', JSON.stringify({ packages: { 'node_modules/auto-tracking-angular': { version: '0.0.1' } } }));
+    expect(cli('hook', 'pre-push').status).toBe(0);
   });
 
   it('instala, gera no commit, deixa commit sem mudança intacto e protege edição não preparada e o push', () => {
