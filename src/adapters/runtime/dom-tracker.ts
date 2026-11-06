@@ -1,6 +1,6 @@
 // T09–T14 — emissão runtime: gesto DOM → elemento marcado → owner → tela atual → schema → send
 import { validateEvent, type TrackingSchema } from '../../domain/contract/schema.js';
-import { labelSlug, slug } from '../../domain/contract/slug.js';
+import { labelSlug, MAX_PROVEN_LABEL, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
 import type { TrackingElement } from '../../domain/contract/tracking-element.js';
 import { TrackingTokenCache } from '../../domain/contract/tracking-token.js';
@@ -8,7 +8,7 @@ import type { TrackingSurfaceDefinition } from '../../domain/contract/tracking-s
 import { trackingSurfaceContract } from '../../domain/contract/tracking-surface.js';
 import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
-import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
+import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_KIND, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
 
 export interface DomTrackerDeps {
@@ -542,19 +542,22 @@ export class DomEventTracker {
     // Overlay ou conteúdo com contrato da lib (ref, marcador ou superfície) segue esse contrato; aqui só o que nenhum cobre.
     if (path.slice(0, overlayIndex + 1).some((element) => element.hasAttribute('data-at-ref') || element.hasAttribute('data-at-id')
       || element.hasAttribute('data-at-outputs') || element.hasAttribute('data-at-overlay-outputs'))) return false;
-    const target = inner.find((element) => element.matches(OVERLAY_ACTION_SELECTOR));
+    const actions = inner.filter((element) => element.matches(OVERLAY_ACTION_SELECTOR));
+    // Parte interna de shadow DOM (ex.: <button> nativo do ion-button) só tem <slot>; o texto projetado está no host.
+    const target = actions.find((element) => !(element.getRootNode() as { host?: Element }).host) ?? actions[0];
     if (!target || target.matches(':disabled, [aria-disabled="true"]')) return false;
     const screen = this.deps.surfaces?.capture(this.deps.owner);
     if (!screen) return false;
-    const label = slug(DomEventTracker.currentLabel(target));
+    const action = slug(DomEventTracker.currentLabel(target));
+    const context = action ? DomEventTracker.overlayContext(path[overlayIndex]!, target) : '';
+    // Rótulo autoexplicativo: a ação sozinha ("ok", "fechar") não diz de qual overlay veio.
+    const label = context && !action.includes(context) ? slug(`${action}-${context}`, MAX_PROVEN_LABEL) : action;
     if (!label) {
       this.warnSafely('[auto-tracking] ação de overlay sem rótulo público; evento não enviado');
       return true;
     }
-    const role = target.getAttribute('role') ?? '';
-    const elemento = /radio|option/.test(role) || target.matches('ion-radio, input[type="radio"]') ? 'radio'
-      : /checkbox/.test(role) || target.matches('ion-checkbox, ion-toggle, input[type="checkbox"]') ? 'checkbox'
-        : target.matches('a[href], [role="link"]') ? 'link' : 'botao';
+    // O elemento clicado é o próprio overlay: diz ao produto em que tipo de janela a ação aconteceu.
+    const elemento = DomEventTracker.overlayKind(path[overlayIndex]!);
     const build = (environment: string, product: string): Params => {
       const base = DomEventTracker.baseParams(screen, environment, product);
       return { ...base, categoria: base['tela']!, elemento, rotulo: label, acao: 'clique' };
@@ -710,6 +713,20 @@ export class DomEventTracker {
       text = parts.join(' ');
     }
     return /@|\d(?:[.\-\/ ]?\d){5,}/.test(text) ? '' : labelSlug(text);
+  }
+
+  /** Título público do overlay (aria-labelledby, aria-label ou cabeçalho visível); sem título, o tipo do overlay. */
+  private static overlayContext(overlay: Element, target: Element): string {
+    const labelledBy = overlay.getAttribute('aria-labelledby')?.split(/\s+/).map((id) => overlay.ownerDocument.getElementById(id))
+      .find((element): element is HTMLElement => !!element);
+    const heading = labelledBy ?? (overlay.hasAttribute('aria-label') ? overlay
+      : Array.from(overlay.querySelectorAll(OVERLAY_TITLE_SELECTOR)).find((element) => !target.contains(element) && !element.contains(target)));
+    const title = heading ? DomEventTracker.currentLabel(heading) : '';
+    return title || DomEventTracker.overlayKind(overlay);
+  }
+
+  private static overlayKind(overlay: Element): string {
+    return OVERLAY_KIND[overlay.localName] ?? 'modal';
   }
 
   private static visibleLabel(element: Element): string {

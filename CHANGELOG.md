@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.1 — 2026-11-06
+
+### Overlays criados por código
+
+- Botão Ionic (`ion-button`) em modal/alert sem marcação passa a gerar `click`: o alvo é o host com o texto projetado, não o `<button>` interno do shadow DOM (que só contém `<slot>`).
+- `elemento` informa o tipo do overlay (`modal`, `alerta`, `menu-de-opcoes`, `popover`) e o `rotulo` leva o contexto: `<acao>-<titulo-do-overlay>` (ex.: `ok-desculpe`), lido de `aria-labelledby`, `aria-label` ou do cabeçalho visível. Sem título público (ou título com dado pessoal), o contexto é o tipo do overlay.
+
 ## 2.2.0 — 2026-11-06
 
 ### Segurança (SCA)
