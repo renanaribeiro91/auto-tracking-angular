@@ -1,5 +1,5 @@
 /** @jest-environment jsdom */
-import { AutoTrackingSurfaces, installDomTracker } from '../../src/adapters/runtime/dom-tracker.js';
+import { AutoTrackingSurfaces, DomEventTracker, installDomTracker } from '../../src/adapters/runtime/dom-tracker.js';
 import { defineTrackingSurface, trackingSurfaceContract, type TrackingSurfaceDefinition } from '../../src/domain/contract/tracking-surface.js';
 import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
 import { createTrackingSurface } from '../../src/adapters/runtime/create-tracking-surface.js';
@@ -48,12 +48,40 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
     root.querySelector('p')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
     expect(sent).toEqual([{ name: 'click', params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'outro-fluxo',
-      tela: 'app-x:saude:outra', categoria: 'app-x:saude:outra', elemento: 'botao', rotulo: 'fechar-ajuda', acao: 'clique' } }]);
+      tela: 'app-x:saude:outro-fluxo:outra', categoria: 'app-x:saude:outro-fluxo:outra', elemento: 'botao', rotulo: 'fechar-ajuda', acao: 'clique' } }]);
     detach(); detach();
     expect(root.hasAttribute('data-at-ref')).toBe(false);
-    root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    // Fechado, o framework remove o portal: o vínculo antigo não sobrevive no DOM.
+    const button = root.querySelector('button')!;
+    root.remove();
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
     expect(sent).toHaveLength(1); expect(warns).toEqual([]);
+  });
+
+  it.each([['tracker do host', () => new AutoTrackingSurfaces('host', () => ({ funcionalidade: 'host', tela: 'inicio' }))],
+    ['instância padrão sem owner', () => new AutoTrackingSurfaces('')]])(
+    'capture()+attach() manual em serviço raiz com %s usa o owner da ref e sua tela', async (_name, injected) => {
+      const deactivate = AutoTrackingSurfaces.activate(document, surfaces);
+      try {
+        const tracking = injected();
+        const definition = tagged([{ id: 'fechar', selector: '#fechar', elemento: 'botao', rotulo: 'Fechar ajuda' }]);
+        const detach = tracking.attach(root, definition, tracking.capture());
+        root.querySelector('span')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+        await flush();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:documentacao', rotulo: 'fechar-ajuda' });
+        detach();
+        expect(root.hasAttribute('data-at-ref')).toBe(false);
+        expect(warns).toEqual([]);
+      } finally { deactivate(); }
+    });
+
+  it('página sob overlay (aria-hidden/inert do Ionic) continua sendo a tela; página saída (.ion-page-hidden) não', () => {
+    document.body.innerHTML = `<app-page aria-hidden="true" inert><div data-at-screen="r-t-tela" data-at-owner="app" data-at-funcionalidade="r" data-at-tela="t"></div></app-page>
+      <app-old class="ion-page-hidden"><div data-at-screen="r-o-tela" data-at-owner="app" data-at-funcionalidade="r" data-at-tela="o"></div></app-old>`;
+    expect(DomEventTracker.screenForHost(document, 'app-page', 'classic', 'app')).toEqual({ funcionalidade: 'r', tela: 't' });
+    expect(DomEventTracker.screenForHost(document, 'app-old', 'classic', 'app')).toBeNull();
   });
 
   it('encontra a superfície ativa do MFE mesmo quando o serviço raiz injeta o tracker do host', async () => {
@@ -69,7 +97,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
       root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await flush();
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:outra' });
+      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:outra' });
     } finally {
       deactivate();
     }
@@ -159,7 +187,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
     root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.params).toMatchObject({ tela: 'app-x:saude:outra', funcionalidade: 'reembolso' });
+    expect(sent[0]!.params).toMatchObject({ tela: 'app-x:saude:reembolso:outra', funcionalidade: 'reembolso' });
   });
 
   it('não reutiliza captura antiga quando o owner não tem tela visível', async () => {
@@ -183,7 +211,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
       resolveEnvironment: async () => 'app-x', send: (event) => { sent.push(event); }, warn: (warning) => { warns.push(warning); } });
     root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
-    expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:manual' });
+    expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:manual' });
   });
 
   it('prioriza a rota ancestral do mesmo owner quando o elemento permanece dentro dela', async () => {
@@ -195,7 +223,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
     surfaces.attach(root, tagged([{ id: 'fechar', selector: '#fechar', elemento: 'botao', rotulo: 'Fechar' }]), surfaces.capture());
     root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
-    expect(sent.filter((event) => event.name === 'click')[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:pagina-visivel' });
+    expect(sent.filter((event) => event.name === 'click')[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:pagina-visivel' });
   });
 
   it('seleciona somente o rótulo público declarado para a ação', async () => {

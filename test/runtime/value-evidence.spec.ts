@@ -88,7 +88,7 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
       ['confirmar-escolha',undefined],['escolher-unidade','unidade-sul'],['alterar-unidade','unidade-leste'],
       ['continuar',undefined],['abrir-opcoes',undefined],['reservar','espaco-norte'],['trocar-reserva','espaco-sul'],['espaco-leste','espaco-leste'],['espaco-oeste','espaco-oeste'],
     ]);
-    expect(clicks.every((event)=>event.params['tela']==='app-x:produto:page' && event.params['funcionalidade']==='catalogo')).toBe(true);
+    expect(clicks.every((event)=>event.params['tela']==='app-x:produto:catalogo:page' && event.params['funcionalidade']==='catalogo')).toBe(true);
     expect(warnings).toEqual([]);
     // Sem correspondência pública, nem ID nem objeto nem placeholder pode chegar ao dispatch.
     select.dispatchEvent(new CustomEvent('change',{bubbles:true,detail:{value:'opaque-missing'}}));
@@ -97,7 +97,8 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
     await flush(); expect(sent.filter((event)=>event.name==='click')).toHaveLength(9);
     expect(warnings).toHaveLength(3);
     expect(JSON.stringify(sent)).not.toMatch(/opaque|\[valor|example.com|Segredo/);
-    detach(); button.dispatchEvent(new MouseEvent('click',{bubbles:true})); await flush();
+    // Fechado, o framework remove o portal do DOM.
+    detach(); button.closest('dialog, [role=dialog], ion-modal')?.remove(); button.dispatchEvent(new MouseEvent('click',{bubbles:true})); await flush();
     expect(sent.filter((event)=>event.name==='click')).toHaveLength(9);
 
     const file=path.join(root,'evidencia.xlsx');

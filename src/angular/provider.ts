@@ -8,6 +8,7 @@ import {
   makeEnvironmentProviders,
   provideEnvironmentInitializer,
   reflectComponentType,
+  ɵɵdefineInjectable,
   type EnvironmentProviders,
   type Type,
 } from '@angular/core';
@@ -83,7 +84,7 @@ export class TrackingDispatcher {
       ambiente: environment,
       produto: this.options.product,
       funcionalidade: screen.funcionalidade,
-      tela: `${environment}:${this.options.product}:${screen.tela}`,
+      tela: `${environment}:${this.options.product}:${screen.funcionalidade}:${screen.tela}`,
     } };
     const validation = validateEvent(event, this.options.preset.schema);
     if (validation.kind !== 'valid') {
@@ -269,6 +270,12 @@ class AutoTrackingLifecycle {
     return registry;
   }
 }
+
+// Injector sem provideAutoTracking (service `providedIn: 'root'` de MFE no host) recebe uma instância
+// sem owner: attach resolve o owner pela ref gravada pelo CLI, e nunca injeta null.
+(AutoTrackingSurfaces as unknown as { ɵprov: unknown }).ɵprov = ɵɵdefineInjectable({
+  token: AutoTrackingSurfaces, providedIn: 'root', factory: () => new AutoTrackingSurfaces(''),
+});
 
 /**
  * Registra o auto-tracking no bootstrap (NgModule, standalone ou módulo lazy de MFE).

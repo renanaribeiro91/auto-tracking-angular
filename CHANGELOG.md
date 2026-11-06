@@ -13,6 +13,11 @@
 - Superfícies criadas por TypeScript (`defineTrackingSurface`/`AutoTrackingSurfaces`) usam a tela visível que apresenta o gesto; portal sem origem verificável não recebe tela inventada.
 - Opção selecionada de item de lista: um campo `nome<X>`/`descricao<X>` só é enviado quando o tipo declarado do item prova que a pessoa física é outro sujeito (`{ nomeX, nomeY, cpfX }` envia apenas `nomeY`). Sem prova, nada é enviado e o CLI emite diagnóstico.
 - Planilha nomeia o valor escolhido pelo campo comprovado (`[nome-especialidade-selecionado]`); campo genérico usa o objeto do handler (`selecionarSala` + `name` → `[nome-sala-selecionado]`).
+- `tela` passa a ser `ambiente:produto:funcionalidade:page` (click, screen_view e planilha); `categoria` acompanha a tela.
+- Item de lista com interação que recebe o item envia o campo público exibido em `opcao_selecionada_1`, sem regra por tipo de componente; nome de pessoa, documento, endereço e bairro nunca são enviados.
+- Controle de escolha que abre overlay próprio (sheet/modal/popover/alert) e aplica o valor por código ao fechar envia a opção escolhida; abertura por output de clique do mesmo `onChange` também arma a escolha, sem duplicar com `ionChange`.
+- Overlays criados por código: serviço `providedIn: 'root'` (inclusive de MFE no host) recebe `AutoTrackingSurfaces` e o owner é resolvido pela ref; a página sob o overlay (`aria-hidden`/`inert` do Ionic) continua sendo a tela de origem.
+- Ação acionável em overlay sem contrato da lib (action-sheet, alert, modal de biblioteca) gera `click` com a tela visível do owner que o apresentou e o rótulo exibido; só o owner dono da página emite.
 - `verify` compara o JSON e as células reais do XLSX. Regere com `npx auto-tracking` após atualizar.
 
 ## 2.1.1 — 2026-11-04

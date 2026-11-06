@@ -50,7 +50,7 @@ export const WORKBOOK_LAYOUT = {
   indicatorLabels: ['Módulos', 'Telas', 'Interações'] as const,
   summaryTitle: 'Evidência de tagueamento',
   summarySubtitle: 'Aplicação {owner}  ·  Produto {product}',
-  screenNote: 'Tela = {ambiente}:{product}:<tela>  ·  ambiente definido pela configuração do aplicativo',
+  screenNote: 'Tela = {ambiente}:{product}:<funcionalidade>:<tela>  ·  ambiente definido pela configuração do aplicativo',
   moduleNavigation: 'Clique no módulo para abrir a aba',
   backToSummary: '← Resumo',
   centeredModuleColumns: ['evento', 'acao', 'elemento', 'produto', 'linha'] as const,

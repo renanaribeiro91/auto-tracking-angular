@@ -194,7 +194,7 @@ describe('contrato entre prova estática e captura real', () => {
       expect(sentFed).toHaveLength(1);
       expect(sentMob).toHaveLength(0);
       expect(sentFed[0]!.params['funcionalidade']).toBe('teste');
-      expect(sentFed[0]!.params['tela']).toBe('app-x:saude:pagina');
+      expect(sentFed[0]!.params['tela']).toBe('app-x:saude:teste:pagina');
       mobModal.querySelector('i')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(sentFed).toHaveLength(1);

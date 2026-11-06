@@ -63,7 +63,7 @@ it('pareia a superfície TS gerada com o evento real do DOM e reconcilia mudanç
       expect(entry.telas).toEqual([`${screen.funcionalidade}:${screen.tela}`]);
       expect(events[index]).toMatchObject({ name: entry.evento, params: {
         rotulo: entry.rotulo, elemento: entry.elemento, funcionalidade: screen.funcionalidade,
-        tela: `app-x:produto:${screen.tela}`, categoria: `app-x:produto:${screen.tela}`,
+        tela: `app-x:produto:${screen.funcionalidade}:${screen.tela}`, categoria: `app-x:produto:${screen.funcionalidade}:${screen.tela}`,
       } });
     }
     expect(events).toHaveLength(2);

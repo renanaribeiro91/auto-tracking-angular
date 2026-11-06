@@ -4,7 +4,7 @@ import { examplePreset } from '../fixtures/preset/index.js';
 
 const click = {
   ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso',
-  tela: 'app-x:saude:tipo-documento', categoria: 'app-x:saude:tipo-documento',
+  tela: 'app-x:saude:reembolso:tipo-documento', categoria: 'app-x:saude:reembolso:tipo-documento',
   elemento: 'botao', rotulo: 'anexar-recibo', acao: 'clique',
 };
 
@@ -33,7 +33,7 @@ describe('contrato público', () => {
       expect(validateEvent({ name: 'click', params: { ...click, label: 'x' } }, schema)).toEqual({ kind: 'extra-params', params: ['label'] });
     });
     it('screen_view leva só ambiente, produto, funcionalidade e tela', () => {
-      const tela = { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', tela: 'app-x:saude:tipo-documento' };
+      const tela = { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:tipo-documento' };
       expect(validateEvent({ name: 'screen_view', params: tela }, schema)).toEqual({ kind: 'valid' });
       expect(validateEvent({ name: 'screen_view', params: { ...tela, categoria: tela.tela } }, schema)).toEqual({ kind: 'extra-params', params: ['categoria'] });
     });

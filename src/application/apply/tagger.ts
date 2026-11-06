@@ -204,33 +204,45 @@ export class TemplateTagger {
   private listSelection(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext): string | null | undefined {
     const loop = /^\s*let\s+([\w$]+)\s+of\s+(?:this\.)?([\w$]+)\s*(?:[;,]|$)/.exec(attrs.get('*ngFor') ?? '');
     if (!loop) return null;
-    if (!attrs.has('(click)')) return null;
-    const selectionHandler = this.analysis.handlerName(attrs.get('(click)')!);
-    if (!/^(?:selecionar|escolher|select|choose|pick)(?:[A-Z_$]|$)/.test(selectionHandler)
-      && !['option', 'radio'].includes(attrs.get('role') ?? '')) return null;
     const [, item, list] = loop;
-    const receivesItem = [...attrs].some(([name, expression]) => {
-      if (name !== '(click)') return false;
+    // Qualquer gesto (DOM ou output) que recebe o item, ou um campo dele, escolhe esse item da lista.
+    const gestures = [...attrs].filter(([name]) => /^\((?!keydown|keyup|keypress|focus|blur|mouse|touch|pointer|scroll)[\w.]+\)$/.test(name));
+    const receives = gestures.filter(([, expression]) => {
       const source = ts.createSourceFile('gesture.ts', expression, ts.ScriptTarget.Latest, true);
-      const statement = source.statements[0];
-      return statement && ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression)
-        && statement.expression.arguments.some((arg) => ts.isIdentifier(arg) && arg.text === item);
+      let found = false;
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && node.arguments.some((arg) => {
+          let root: ts.Expression = arg;
+          while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
+          return ts.isIdentifier(root) && root.text === item;
+        })) found = true;
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+      return found;
     });
-    if (!receivesItem) return null;
+    if (!receives.length) return null;
+    const context = this.words([list!, ...receives.map(([, expression]) => this.analysis.handlerName(expression))].join('-'));
+    // Plural (`enderecos`, `beneficiarios`) tem o mesmo significado pessoal do singular.
+    const personal = (words: string): boolean => PERSONAL_DATA_EXPRESSION.test(words) || PERSONAL_DATA_EXPRESSION.test(words.replace(/s(?=-|$)/g, ''));
+    if (personal(context)) return null;
     const close = html.indexOf(`</${tag}`, tagEnd);
+    const bound = [...attrs].filter(([name]) => /^\[(?!attr\.data-|ngClass|class|style|ngStyle|id|attr\.id|attr\.data-testid)/.test(name)).map(([, value]) => value);
     const expressions = ['[attr.aria-label]', '[aria-label]', '[label]', '[title]'].map((name) => attrs.get(name) ?? '')
-      .concat([...html.slice(tagEnd, close < 0 ? tagEnd : close).matchAll(/\{\{\s*([^}]+)\s*\}\}/g)].map((match) => match[1]!));
-    const fields = new Set<string>();
+      .concat(bound, [...html.slice(tagEnd, close < 0 ? tagEnd : close).matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((match) => match[1]!));
+    let unproven = false;
     for (const expression of expressions) {
+      if (new RegExp(`^\\s*${item!.replace(/\$/g, '\\$')}\\s*$`).test(expression)) return item!;
       for (const match of expression.matchAll(/\b([\w$]+)\.([\w$]+)\b/g)) if (match[1] === item) {
         const field = match[2]!;
         const known = ctx.listLabels?.(list!, field);
-        if (known?.length || /^(?:label|title|titulo|text|texto)$/.test(field) || this.publicItemDescriptor(field, ctx.listItemFields?.(list!))) fields.add(field);
+        if (known?.length || /^(?:label|title|titulo|text|texto|rotulo|descricao|description|nome|name)$/.test(field) && !ctx.listItemFields?.(list!)?.some((name) => /(?:^|-)(?:cpf|rg|nascimento)(?:-|$)/.test(this.words(name)))
+          || this.publicItemDescriptor(field, ctx.listItemFields?.(list!))
+          || !personal(this.words(field)) && !/^(?:id|uuid|codigo|cod|cd|index|indice|key|chave|value|url|link|icon|icone|imagem|image|img|src|rota|route|path|tipo|type|status|ativo|selecionado|selected|disabled|checked)$/i.test(field)) return `${item}.${field}`;
+        unproven = true;
       }
-      // Acessibilidade tem precedência sobre descrições secundárias.
-      if (fields.size === 1) break;
     }
-    return fields.size === 1 ? `${item}.${[...fields][0]}` : undefined;
+    return unproven ? undefined : null;
   }
 
   /**
@@ -252,9 +264,14 @@ export class TemplateTagger {
    * (`nomeEspecialidade`); campo genérico (`name`, `titulo`…) recebe o objeto do
    * handler de seleção (`selecionarSala` → `[nome-sala-selecionado]`).
    */
-  private optionPlaceholder(field: string, click: string): string {
+  private optionPlaceholder(field: string, click: string, item: string): string {
     if (!/^(?:name|nome|label|title|titulo|text|texto)$/i.test(field)) return `[${this.words(field)}-selecionado]`;
-    const noun = this.words(this.analysis.handlerName(click)).replace(/^(?:selecionar|escolher|select|choose|pick)-?/, '');
+    // Remove prefixo de evento, o verbo e preposições: `onSelecionarSala`/`irPara` → objeto da ação, ou o próprio item.
+    const words = this.words(this.analysis.handlerName(click)).split('-').filter(Boolean);
+    if (/^(?:on|ao|handle)$/.test(words[0] ?? '')) words.shift();
+    words.shift();
+    while (/^(?:para|pra|de|do|da|dos|das|ao|a|o|em|no|na|com|to|for|of)$/.test(words[0] ?? '')) words.shift();
+    const noun = words.join('-') || this.words(item);
     return `[nome${noun ? `-${noun}` : ''}-selecionado]`;
   }
 
@@ -597,11 +614,12 @@ export class TemplateTagger {
         desired.set('[attr.data-at-option]', selectionSource);
         derived.add('[attr.data-at-option]');
         const list = /^\s*let\s+[\w$]+\s+of\s+(?:this\.)?([\w$]+)/.exec(attrs.get('*ngFor') ?? '')?.[1];
-        const values = list ? ctx.listLabels?.(list, selectionSource.split('.')[1]!) : null;
+        const field = selectionSource.split('.')[1];
+        const values = list && field ? ctx.listLabels?.(list, field) : null;
         if (values?.length) { desired.set('data-at-option-allowed', values.join('|')); derived.add('data-at-option-allowed'); }
       }
       // Campo público comprovado nomeia o valor; sem ele, o significado genérico.
-      const optionSheet = selectionSource ? this.optionPlaceholder(selectionSource.split('.')[1]!, attrs.get('(click)') ?? '') : '[valor-selecionado]';
+      const optionSheet = selectionSource ? this.optionPlaceholder(selectionSource.split('.')[1] ?? 'nome', [...attrs].find(([name]) => name.startsWith('('))?.[1] ?? '', selectionSource.split('.')[0]!) : '[valor-selecionado]';
       // Planilha registra o significado do valor dinâmico, nunca a expressão de código.
       const sheetLabel = (rotulo: string, dynamic: boolean): string => dynamic ? '[rotulo-do-botao-exibido]' : rotulo;
       if (rotulos.length && ctx.mode !== 'ref') {
@@ -789,6 +807,10 @@ export class TemplateTagger {
         derived.clear();
         derived.add('data-at-ref');
         if (selectionSource) { desired.set('[attr.data-at-option]', selectionSource); derived.add('[attr.data-at-option]'); }
+      }
+      // Opção sem evento comprovado no próprio elemento seria um atributo órfão.
+      if (!entries.slice(entryStart).some((entry) => entry.evento === 'click')) {
+        for (const name of ['[attr.data-at-option]', 'data-at-option-allowed']) { desired.delete(name); derived.delete(name); }
       }
       // Substitui o output no mesmo lugar: a compactação não deve reordenar
       // os outros atributos da tag nem produzir diffs sem significado.

@@ -133,7 +133,7 @@ export class EvidenceWorkbookWriter {
         const parts = screenRef?.split(':');
         const modulo = parts?.[0] ?? entry.funcionalidade;
         const screenName = parts?.[1] ?? '';
-        const screen = `{ambiente}:${input.product}:${screenRef ? screenName : '{tela-de-origem}'}`;
+        const screen = `{ambiente}:${input.product}:${screenRef ? `${modulo}:${screenName}` : '{funcionalidade-de-origem}:{tela-de-origem}'}`;
         rows.push({
           modulo,
           id: entry.id,

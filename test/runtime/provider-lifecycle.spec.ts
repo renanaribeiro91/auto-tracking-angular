@@ -16,6 +16,7 @@ jest.mock('@angular/core', () => ({
   InjectionToken: class InjectionToken { constructor(readonly description: string) {} },
   inject: (token: unknown) => dependencyContext.get(token),
   makeEnvironmentProviders: (providers: unknown[]) => providers,
+  ɵɵdefineInjectable: (definition: unknown) => definition,
   reflectComponentType: (component: { selector?: string }) => component.selector ? { selector: component.selector } : null,
 }));
 jest.mock('@angular/common', () => ({ DOCUMENT: tokens.DOCUMENT }));
@@ -91,7 +92,7 @@ describe('provider Angular/Ionic independente de aplicação específica', () =>
     await event;
     expect(sent).toEqual([{ name: 'modal_open', params: {
       ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso',
-      tela: 'app-x:saude:detalhes-documentacao', modal: 'indisponibilidade',
+      tela: 'app-x:saude:reembolso:detalhes-documentacao', modal: 'indisponibilidade',
     } }]);
     await expect(dispatcher.track('modal_open', origin, { modal: 'indisponibilidade', nome: 'Maria' }))
       .rejects.toThrow('rejeitado pelo schema');

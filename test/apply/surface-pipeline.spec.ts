@@ -215,8 +215,8 @@ export class AgendaPage { constructor(private modal: ModalService) {} abrir() { 
     workbook.eachSheet((sheet) => sheet.eachRow((row) => {
       const cells = row.values as unknown[];
       if (cells.includes('indisponibilidade-fechar')) {
-        if (cells.includes('{ambiente}:saude:agenda')) origins.add('consulta:agenda');
-        if (cells.includes('{ambiente}:saude:tipo')) origins.add('reembolso:tipo');
+        if (cells.includes('{ambiente}:saude:consulta:agenda')) origins.add('consulta:agenda');
+        if (cells.includes('{ambiente}:saude:reembolso:tipo')) origins.add('reembolso:tipo');
       }
     }));
     expect([...origins].sort()).toEqual(['consulta:agenda', 'reembolso:tipo']);

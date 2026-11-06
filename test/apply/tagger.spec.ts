@@ -161,6 +161,23 @@ describe('tagger: toda interação declarada no template', () => {
     expect(r.entries[0]?.opcao_selecionada_1).toBe('[nome-sala-selecionado]');
     expect(r.html).toContain('[attr.data-at-option]="c.name"');
   });
+  it('escolha de item de lista envia o campo público exibido, nunca dado pessoal ou técnico', () => {
+    const option = (html: string) => {
+      const r = tagTemplate(html, ctx());
+      return { attr: /\[attr\.data-at-option\]="([^"]+)"/.exec(r.html)?.[1] ?? null, sheet: r.entries.find((e) => e.evento === 'click')?.opcao_selecionada_1 };
+    };
+    expect(option('<x-card *ngFor="let p of produtos" [titulo]="p.titulo" (click)="selecionarProduto(p)"></x-card>'))
+      .toEqual({ attr: 'p.titulo', sheet: '[nome-produto-selecionado]' });
+    expect(option('<x-card *ngFor="let p of produtos" [titulo]="p.titulo" (click)="abrirProduto(p)"></x-card>').attr).toBe('p.titulo');
+    expect(option('<x-botao *ngFor="let botao of botoes" [title]="botao.titulo" (click)="irPara(botao.rota)"></x-botao>').sheet).toBe('[nome-botao-selecionado]');
+    // Output sem prova no catálogo não gera evento: a opção também não é gravada.
+    expect(option('<bsad-card *ngFor="let p of produtos" [titulo]="p.titulo" (onClick)="abrirProduto(p)"></bsad-card>').attr).toBeNull();
+    expect(option('<div *ngFor="let b of especialidades" (click)="onSelecionarAutoComplete(b)">{{ b }}</div>').attr).toBe('b');
+    expect(option('<ion-item *ngFor="let s of semestres" (click)="desmarcar(s); selecionarSemestre(s.rotulo)">{{ s.rotulo }}</ion-item>').attr).toBe('s.rotulo');
+    expect(option('<ion-item *ngFor="let e of enderecos" (click)="selecionar(e)">{{ e.description }}</ion-item>').attr).toBeNull();
+    expect(option('<ion-item *ngFor="let x of itens" (click)="selecionar(x)">{{ x.cpf }}</ion-item>').attr).toBeNull();
+    expect(option('<ion-item *ngFor="let x of itens" (click)="salvar()">{{ x.titulo }}</ion-item>').attr).toBeNull();
+  });
   it('aria-label dinâmico não vira rótulo: valor variável nunca é enviado, usa o nome da ação', () => {
     const result = tagTemplate('<button [attr.aria-label]="item.nome" (click)="escolher()"></button>', ctx());
     expect(result.entries[0]).toMatchObject({ rotulo: 'escolher' });

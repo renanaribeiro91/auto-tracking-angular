@@ -8,7 +8,7 @@ import type { TrackingSurfaceDefinition } from '../../domain/contract/tracking-s
 import { trackingSurfaceContract } from '../../domain/contract/tracking-surface.js';
 import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
-import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
+import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
 
 export interface DomTrackerDeps {
@@ -98,7 +98,10 @@ export class AutoTrackingSurfaces {
 
   /** A mesma ref gravada pelo CLI liga a evidência estática ao DOM do portal. */
   attach(root: Element, definition: TrackingSurfaceDefinition, screen: TrackingScreen | null): () => void {
-    try { return this.attachChecked(root, definition, screen); }
+    // Service da raiz do host recebe a instância de outro owner (ou a padrão): a ref decide o owner e sua origem.
+    const target = root?.ownerDocument ? AutoTrackingSurfaces.forDefinition(root.ownerDocument, definition) : null;
+    if (target && target !== this) return target.attach(root, definition, target.capture());
+    try { return this.attachChecked(root, definition, screen ?? this.capture()); }
     catch (error) {
       try { console.warn(`[auto-tracking] superfície não vinculada: ${String(error)}`); } catch { /* preservar o fluxo do modal */ }
       return () => {};
@@ -203,6 +206,8 @@ export class AutoTrackingSurfaces {
 export class DomEventTracker {
   private static readonly tokens = new TrackingTokenCache();
   private active = true;
+  /** Escolha aberta em overlay próprio do componente (sheet/modal/popover): o valor muda sem ionChange. */
+  private pendingChoice: { readonly id: string; readonly finish: () => boolean; readonly expires: number } | null = null;
   constructor(private readonly document: Document, private readonly deps: DomTrackerDeps) {}
 
   /** Falhas são observáveis, mas nunca podem interromper o gesto de negócio. */
@@ -227,7 +232,11 @@ export class DomEventTracker {
         if (handled.has(event)) return;
         const hit = this.deps.surfaces?.resolve(event, this.deps.owner)
           ?? DomEventTracker.resolveHit(event, this.deps.mode ?? 'classic');
-        if (!hit || (hit.owner ?? hit.descriptor?.owner ?? hit.host.getAttribute('data-at-owner')) !== this.deps.owner) return;
+        if (!hit) {
+          if (event.type === 'click' && this.emitOverlayAction(event)) handled.add(event);
+          return;
+        }
+        if ((hit.owner ?? hit.descriptor?.owner ?? hit.host.getAttribute('data-at-owner')) !== this.deps.owner) return;
         handled.add(event);
         this.emitClick(event, hit);
       } catch (error) {
@@ -235,6 +244,7 @@ export class DomEventTracker {
       }
     };
 
+    const onDismiss = (): void => this.settleChoice();
     const registered = new Set<string>();
     const listen = (name: string): void => {
       if (!/^[A-Za-z][\w:-]*$/.test(name) || registered.has(name)) return;
@@ -279,12 +289,15 @@ export class DomEventTracker {
       observer?.disconnect();
       scheduler.stop();
       for (const eventName of registered) this.document.removeEventListener(eventName, onEvent, true);
+      for (const name of OVERLAY_DISMISS_EVENTS) this.document.removeEventListener(name, onDismiss, true);
+      this.pendingChoice = null;
       registered.clear();
     };
     try {
       // Gestos DOM principais precisam funcionar imediatamente; descoberta
       // de CustomEvents é incremental, não uma varredura bloqueante.
       TRACKED_DOM_EVENTS.forEach(listen);
+      for (const name of OVERLAY_DISMISS_EVENTS) this.document.addEventListener(name, onDismiss, true);
       let initialRoot = documentRoot;
       if (this.deps.root) {
         try { initialRoot = this.document.querySelector(this.deps.root) ?? documentRoot; }
@@ -415,8 +428,11 @@ export class DomEventTracker {
 
   /** Marcador de tela do componente roteado: primeiro filho do host com data-at-screen. */
   static findScreenMarker(document: Document, hostSelector: string, mode: TrackingMode = 'classic', owner?: string): Element | null {
-    for (const host of Array.from(document.querySelectorAll(hostSelector))) {
-      if (host.closest('[hidden], [inert], [aria-hidden="true"], .ion-page-hidden')) continue;
+    const hosts = Array.from(document.querySelectorAll(hostSelector)).filter((host) => !host.closest('[hidden], .ion-page-hidden'));
+    // Overlay aberto aplica aria-hidden/inert na página de baixo, que segue sendo a tela; só vale sem instância visível.
+    const covered = (host: Element): boolean => !!host.closest('[inert], [aria-hidden="true"]');
+    const visible = hosts.filter((host) => !covered(host));
+    for (const host of visible.length ? visible : hosts) {
       const marker = Array.from(host.children).find((child) => {
         const descriptor = this.descriptorOf(child, mode);
         return (!owner || (descriptor?.owner ?? child.getAttribute('data-at-owner')) === owner)
@@ -485,7 +501,10 @@ export class DomEventTracker {
     const accessibleNumber = hit.descriptor?.click?.opcaoFonte === 'aria-label-numero'
       ? DomEventTracker.accessibleNumericOption(hit.host, allowed)
       : null;
-    const opening = event.type === 'click' && (['change', 'ionChange'].includes(hit.event ?? '') || hit.descriptor?.click?.event === 'ionChange'
+    // Gatilho de clique de um output de mudança (seta, campo, botão interno) também abre a escolha.
+    const changeOutput = DomEventTracker.outputsFor(hit.host, this.deps.mode ?? 'classic')
+      .some((binding) => binding.id === hit.id && (binding.event === 'ionChange' || binding.event === 'change'));
+    const opening = event.type === 'click' && (changeOutput || ['change', 'ionChange'].includes(hit.event ?? '') || hit.descriptor?.click?.event === 'ionChange'
       || hit.descriptor?.click?.event === 'change' || ['ionChange', 'change'].includes(hit.host.getAttribute('data-at-event') ?? ''));
     const option = event.type === 'click'
       ? opening ? null : hit.option ?? accessibleNumber ?? (candidate && (allowed === null || allowed.split('|').includes(candidate)) ? candidate : null)
@@ -506,6 +525,85 @@ export class DomEventTracker {
       return params;
     };
     void this.dispatch('click', build, hit.id).catch((error) => this.warnSafely(`[auto-tracking] falha no envio: ${String(error)}`));
+    if (event.type !== 'click' && this.pendingChoice?.id === hit.id) this.pendingChoice = null;
+    if (opening) this.armChoice(event, hit);
+  }
+
+  /**
+   * Overlay criado por código (modal/alert/action-sheet/popover) sem marcação: o gesto acionável usa a
+   * tela visível do owner que o apresentou e o rótulo exibido. Só o owner dono da página emite.
+   */
+  private emitOverlayAction(event: Event): boolean {
+    if (this.pendingChoice) return false; // escolha de select em curso: o próprio controle reporta o valor
+    const path = DomEventTracker.elementsOf(event);
+    const overlayIndex = path.findIndex((element) => element.matches(OVERLAY_SELECTOR));
+    if (overlayIndex < 0) return false;
+    const inner = path.slice(0, overlayIndex);
+    // Overlay ou conteúdo com contrato da lib (ref, marcador ou superfície) segue esse contrato; aqui só o que nenhum cobre.
+    if (path.slice(0, overlayIndex + 1).some((element) => element.hasAttribute('data-at-ref') || element.hasAttribute('data-at-id')
+      || element.hasAttribute('data-at-outputs') || element.hasAttribute('data-at-overlay-outputs'))) return false;
+    const target = inner.find((element) => element.matches(OVERLAY_ACTION_SELECTOR));
+    if (!target || target.matches(':disabled, [aria-disabled="true"]')) return false;
+    const screen = this.deps.surfaces?.capture(this.deps.owner);
+    if (!screen) return false;
+    const label = slug(DomEventTracker.currentLabel(target));
+    if (!label) {
+      this.warnSafely('[auto-tracking] ação de overlay sem rótulo público; evento não enviado');
+      return true;
+    }
+    const role = target.getAttribute('role') ?? '';
+    const elemento = /radio|option/.test(role) || target.matches('ion-radio, input[type="radio"]') ? 'radio'
+      : /checkbox/.test(role) || target.matches('ion-checkbox, ion-toggle, input[type="checkbox"]') ? 'checkbox'
+        : target.matches('a[href], [role="link"]') ? 'link' : 'botao';
+    const build = (environment: string, product: string): Params => {
+      const base = DomEventTracker.baseParams(screen, environment, product);
+      return { ...base, categoria: base['tela']!, elemento, rotulo: label, acao: 'clique' };
+    };
+    void this.dispatch('click', build, `overlay-${label}`).catch((error) => this.warnSafely(`[auto-tracking] falha no envio: ${String(error)}`));
+    return true;
+  }
+
+  /**
+   * Controle de escolha que abre seu próprio overlay atualiza o valor por código ao fechar:
+   * o Ionic não emite ionChange nesse caso. A escolha é lida do valor exibido pelo controle.
+   */
+  private armChoice(event: Event, hit: Hit): void {
+    const control = DomEventTracker.choiceControl(hit.host);
+    if (!control) return;
+    const before = (control as Element & { value?: unknown }).value;
+    const path = event.composedPath();
+    const type = hit.event === 'change' || hit.descriptor?.click?.event === 'change' ? 'change' : 'ionChange';
+    this.pendingChoice = { id: hit.id, expires: Date.now() + 120_000, finish: () => {
+      const after = (control as Element & { value?: unknown }).value;
+      if (DomEventTracker.sameValue(before, after) || after === undefined || after === null || after === '') return false;
+      // Evento interno: nunca é despachado no DOM, então não aciona handlers do aplicativo.
+      const choice = { type, target: control, detail: { value: after }, composedPath: () => path } as unknown as Event;
+      this.emitClick(choice, hit);
+      return true;
+    } };
+  }
+
+  /** Overlay fechado: o componente aplica o valor no mesmo ciclo; a leitura ocorre logo depois. */
+  private settleChoice(): void {
+    const pending = this.pendingChoice;
+    if (!pending) return;
+    if (Date.now() > pending.expires) { this.pendingChoice = null; return; }
+    // Componentes abrem mais de um overlay (alert nativo + sheet próprio): fechamento sem mudança mantém a escolha pendente.
+    const timer = setTimeout(() => {
+      if (this.pendingChoice !== pending) return;
+      try { if (pending.finish()) this.pendingChoice = null; } catch (error) { this.warnSafely(`[auto-tracking] escolha ignorada com segurança: ${String(error)}`); }
+    }, 120);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
+  private static choiceControl(host: Element): Element | null {
+    const selector = 'ion-select, select, ion-radio-group, ion-segment, ion-datetime';
+    return host.matches(selector) ? host : host.querySelector(selector);
+  }
+
+  private static sameValue(a: unknown, b: unknown): boolean {
+    if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, index) => item === b[index]);
+    return a === b;
   }
 
   /** Item de lista estática: o rótulo visível só é enviado se for um dos valores provados pelo CLI. */
@@ -655,7 +753,7 @@ export class DomEventTracker {
   }
 
   private static baseParams(screen: Screen, environment: string, product: string): Params {
-    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, tela: `${environment}:${product}:${screen.tela}` };
+    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, tela: `${environment}:${product}:${screen.funcionalidade}:${screen.tela}` };
   }
 }
 

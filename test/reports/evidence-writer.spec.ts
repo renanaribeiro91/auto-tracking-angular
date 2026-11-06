@@ -83,7 +83,7 @@ describe('planilha de evidência', () => {
     const shared = await zip.file('xl/sharedStrings.xml')!.async('string');
     expect(shared).toContain('app-sair');
     expect(shared).toContain('reutilizavel');
-    expect(shared).toContain('{ambiente}:saude:{tela-de-origem}');
+    expect(shared).toContain('{ambiente}:saude:{funcionalidade-de-origem}:{tela-de-origem}');
     expect(shared).not.toContain('Tela sem vínculo');
 
     const sheets = Object.keys(zip.files).filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/.test(name));
