@@ -12,7 +12,7 @@ import { resolveProductionUsage } from './production-usage.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
-import { overlayComponentName, slug } from '../../domain/contract/slug.js';
+import { labelSlug, overlayComponentName, slug } from '../../domain/contract/slug.js';
 import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
@@ -218,6 +218,19 @@ export class TrackingPipeline {
           current.set(t.file, t.inline ? text.slice(0, t.inline.start) + body + text.slice(t.inline.end) : body);
         }
       }
+      for (const site of index.overlaySites ?? []) {
+        if (!usage.components.has(site.componentKey)) continue;
+        const component = index.components.find((item) => item.key === site.componentKey)!;
+        const resolved = screensOf(component);
+        const rotulo = site.titulo ? labelSlug(site.titulo) : `[titulo-do-${site.elemento}-exibido]`;
+        const base = `${slug(component.className.replace(/([a-z0-9])([A-Z])/g, '$1-$2'), 120)}-visualizacao`;
+        let id = base;
+        for (let n = 2; usedIds.has(id); n++) id = `${base}-${n}`;
+        usedIds.add(id);
+        entries.push({ id, owner: config.owner, evento: 'visualizacao', acao: 'visualizacao', elemento: site.elemento, rotulo, origem: site.origem,
+          ...identity(component), telas: resolved.length ? resolved : [ORIGIN_SCREEN], vinculo_tela: 'origem',
+          arquivo: this.relativePath(consumerRoot, site.file), linha: site.line });
+      }
       for (const surface of index.surfaces ?? []) {
         if (!original.has(surface.file)) {
           const source = this.fileSystem.readText(surface.file);
@@ -253,7 +266,8 @@ export class TrackingPipeline {
       const validReferences = entry.telas.length && entry.telas.every((screen) =>
         screen === '*' || screen === ORIGIN_SCREEN || isStaticScreenReference(screen));
       const requiresOrigin = entry.vinculo_tela === 'origem';
-      const validContract = config.mode !== 'ref' || !requiresOrigin || (entry.ref && decodeTrackingToken(entry.ref)?.requireOrigin === true);
+      const validContract = config.mode !== 'ref' || !requiresOrigin || (entry.evento === 'visualizacao' && !entry.ref)
+        || (entry.ref && decodeTrackingToken(entry.ref)?.requireOrigin === true);
       if (!validReferences || !entry.vinculo_tela || !validContract) diagnostics.push({
         code: 'TRACKING_SCREEN_BINDING_MISSING', arquivo: entry.arquivo, linha: entry.linha,
         mensagem: `interação '${entry.id}' sem contrato de vínculo com a tela de origem`,

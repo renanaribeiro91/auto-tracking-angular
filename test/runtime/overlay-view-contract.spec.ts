@@ -26,13 +26,18 @@ describe('visualizacao de overlay: planilha e runtime com o mesmo contrato', () 
       runtime:{owner:'app',root:'app-root',product:'saude',mode:'ref',send:()=>{}}});`);
     write('src/routes.ts', `import { FaturasPage } from './faturas/faturas.page'; export const routes = [{path:'faturas',component:FaturasPage}];
       const providers = [provideAutoTracking(config.runtime)];`);
-    write('src/faturas/faturas.page.ts', `import { IndisponivelModal } from './indisponivel.modal'; import { SemTituloModal } from './sem-titulo.modal';
+    write('src/faturas/faturas.page.ts', `import { IndisponivelModal } from './indisponivel.modal'; import { SemTituloModal } from './sem-titulo.modal'; import { AvisosService } from './avisos.service';
       @Component({selector:'app-faturas', templateUrl:'./faturas.page.html'})
-      export class FaturasPage { constructor(private modalController: ModalController, private dialog: MatDialog) {}
+      export class FaturasPage { constructor(private modalController: ModalController, private dialog: MatDialog, private alertController: AlertController, private avisos: AvisosService) {}
         async abrir() { const modal = await this.modalController.create({ component: IndisponivelModal }); await modal.present(); }
-        abrirOutro() { this.dialog.open(SemTituloModal); } }`);
+        abrirOutro() { this.dialog.open(SemTituloModal); }
+        avisar() { this.alertController.create({ header: 'Atenção agora' }); }
+        erro(titulo: string) { this.avisos.falhar(titulo); }
+        naoUsado() { this.alertController.create({ header: 'Código morto' }); } }`);
+    write('src/faturas/avisos.service.ts', `import { BsadModalComponent } from 'lib-externa';
+      export class AvisosService { falhar(titulo: string) { return this.modalCtrl.create({ component: BsadModalComponent, componentProps: { title: titulo } }); } }`);
     write('src/faturas/faturas.page.html', `<ion-header><ion-title>Faturas</ion-title></ion-header>
-      <button (click)="abrir()">Ver</button><button (click)="abrirOutro()">Enviar</button>
+      <button (click)="abrir()">Ver</button><button (click)="abrirOutro()">Enviar</button><button (click)="avisar()">Avisar</button><button (click)="erro('x')">Erro</button>
       <ion-modal trigger="abrir-ajuda-faturas"><ng-template><p>Ajuda</p></ng-template></ion-modal>
       <ion-modal [isOpen]="aberto"><ng-template><p>Sem nome</p></ng-template></ion-modal>`);
     write('src/faturas/indisponivel.modal.ts', `@Component({selector:'app-indisponivel-modal', template:'<div class="m"><h2>Indisponibilidade temporária</h2><button (click)="fechar()">Ok</button></div>'})
@@ -54,8 +59,12 @@ describe('visualizacao de overlay: planilha e runtime com o mesmo contrato', () 
       ['modal', 'confirmar-envio', ['faturas:faturas']],
       ['modal', 'ajuda-faturas', ['faturas:faturas']],
     ]));
-    expect(views).toHaveLength(3);
-    expect(first.diagnostics.map((item) => item.code)).toContain('OVERLAY_NAME_UNPROVEN'); // [isOpen]="aberto" sem nome
+    expect(views.map((entry) => [entry.elemento, entry.rotulo, entry.telas])).toEqual(expect.arrayContaining([
+      ['alerta', 'atencao-agora', ['faturas:faturas']],
+      ['modal', '[titulo-do-modal-exibido]', ['faturas:faturas']],
+    ]));
+    expect(views).toHaveLength(5); // abertura em método sem uso não entra
+    expect(first.diagnostics.map((item) => item.code)).toEqual(['OVERLAY_NAME_UNPROVEN']); // só o [isOpen]="aberto" sem nome
 
     // Runtime: o modal apresentado pelo controller contém o template tagueado do componente.
     const modalHtml = fs.readFileSync(path.join(root, 'src/faturas/indisponivel.modal.ts'), 'utf8').match(/template:'([^']*)'/)![1]!;

@@ -6,8 +6,8 @@ import * as path from 'path';
 import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
-import type { ComponentInfo, InlineTemplate, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
-import { OVERLAY_API, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
+import type { ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
+import { OVERLAY_API, OVERLAY_CONTROLLER, OVERLAY_TITLE_PROPERTIES, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
 export type { ComponentInfo, InlineTemplate, ProjectIndex } from '../../application/apply/ports/project-index.js';
 
 interface ClassRecord {
@@ -288,6 +288,22 @@ export class AngularProjectIndexer {
     return unique.size === 1 ? unique.values().next().value! : null;
   }
 
+  /** Título literal nas opções do overlay (`header`, `componentProps.title`, `data.titulo`). */
+  private overlayTitle(...options: readonly (ts.Expression | undefined)[]): string | undefined {
+    for (const option of options) {
+      if (!option || !ts.isObjectLiteralExpression(option)) continue;
+      for (const property of option.properties) {
+        if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) continue;
+        if (OVERLAY_TITLE_PROPERTIES.has(property.name.text) && ts.isStringLiteralLike(property.initializer)) return property.initializer.text;
+        if (['componentProps', 'data'].includes(property.name.text)) {
+          const nested = this.overlayTitle(property.initializer);
+          if (nested) return nested;
+        }
+      }
+    }
+    return undefined;
+  }
+
   private componentReferencesIn(
     node: ts.Node,
     file: string,
@@ -475,6 +491,7 @@ export class AngularProjectIndexer {
     const opens = new Map<string, Set<string>>();
     const rawServiceOpens = new Map<string, Map<string, Set<string>>>();
     const overlayComponents = new Map<string, string>();
+    const overlaySites: OverlaySite[] = [];
     const surfaces: SurfaceDeclaration[] = [];
     const surfaceErrors: { file: string; line: number; message: string }[] = [];
     let providerCalls = 0;
@@ -571,6 +588,27 @@ export class AngularProjectIndexer {
           }
         }
 
+        if (owner && methodName && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+          && /^(?:create|open)$/.test(node.expression.name.text) && node.arguments.length) {
+          const receiver = node.expression.expression;
+          const name = ts.isPropertyAccessExpression(receiver) ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : '';
+          const opensProjectComponent = node.arguments.some((argument) =>
+            this.componentReferencesIn(argument, file, undefined, sourceFiles, recordsByName, recordsByFile).size > 0);
+          if (OVERLAY_CONTROLLER.test(name) && !/service/i.test(name) && !opensProjectComponent) {
+            const componentKey = `overlay-site\0${file}\0${node.getStart()}`;
+            const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+            const titulo = this.overlayTitle(node.arguments[0]!, node.arguments[1]);
+            overlaySites.push({ componentKey, file, line, origem: `${name}.${node.expression.name.text}() em ${owner.className}.${methodName}`,
+              elemento: /alert/i.test(name) ? 'alerta' : /action.?sheet/i.test(name) ? 'menu-de-opcoes' : /popover/i.test(name) ? 'popover' : 'modal',
+              ...(titulo ? { titulo } : {}) });
+            components.push({ key: componentKey, className: `${owner.className}-${methodName}`, tsFile: file, templateFile: null, inlineTemplate: false, inline: null,
+              def: { selectors: [], source: 'projeto', outputs: new Map(), inputs: new Set(), template: '', methods: new Map(), hostListeners: [] },
+              classText: '', serviceDependencies: new Map(), methods: new Map(), referencedComponents: new Set() });
+            if (owner.kind === 'service') this.addServiceOpen(rawServiceOpens, owner.key, methodName, componentKey);
+            else (components.find((item) => item.key === owner!.key)?.methodComponents?.get(methodName) as Set<string> | undefined)?.add(componentKey);
+          }
+        }
+
         if (owner?.kind === 'service' && methodName && (ts.isNewExpression(node) || ts.isCallExpression(node))) {
           const references = node.arguments?.flatMap((argument) => [...this.componentReferencesIn(argument, file, undefined, sourceFiles, recordsByName, recordsByFile)]) ?? [];
           for (const target of references) this.addServiceOpen(rawServiceOpens, owner.key, methodName, target);
@@ -621,7 +659,7 @@ export class AngularProjectIndexer {
       };
       inspect(source);
     }
-    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents,
+    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
       dynamicMethodValues, eagerServices };
   }
 

@@ -60,6 +60,16 @@ export interface ServiceInfo {
 }
 
 /** Resultado da leitura estrutural do projeto Angular, independente do compilador usado. */
+export interface OverlaySite {
+  readonly componentKey: string;
+  readonly elemento: string;
+  /** Título literal da chamada; ausente quando só é conhecido em runtime. */
+  readonly titulo?: string;
+  readonly origem: string;
+  readonly file: string;
+  readonly line: number;
+}
+
 export interface ProjectIndex {
   readonly dynamicMethodValues?: ReadonlyMap<string, ReadonlySet<string>>;
   readonly eagerServices?: ReadonlySet<string>;
@@ -80,6 +90,8 @@ export interface ProjectIndex {
   readonly actionImports?: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** Componente aberto por API de overlay (modal, dialog, popover, sheet) → tipo enviado em `elemento`. */
   readonly overlayComponents?: ReadonlyMap<string, string>;
+  /** Aberturas de overlay sem template no projeto: a visualização entra no relatório pelo ponto do código. */
+  readonly overlaySites?: readonly OverlaySite[];
   /** chamadas provideAutoTracking(<config>.runtime) encontradas (prova de ligação no bootstrap) */
   readonly providerCalls: number;
 }

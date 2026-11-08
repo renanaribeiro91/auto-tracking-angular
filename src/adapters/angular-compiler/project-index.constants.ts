@@ -12,3 +12,8 @@ export const TEST_INFRASTRUCTURE_FILE_PATTERN = /(?:\.spec|\.test|\.e2e|\.cy|set
 
 /** Receptor de API que apresenta um componente como overlay (Ionic, Angular Material/CDK ou service do projeto). */
 export const OVERLAY_API = /(modal|dialog|popover|sheet)/i;
+
+/** Controller que apresenta overlay cujo conteúdo não é componente do projeto (design system, alerta, menu). */
+export const OVERLAY_CONTROLLER = /(alert|action.?sheet|modal|popover|dialog|sheet)/i;
+/** Onde a API de overlay recebe o título: raiz da chamada, `componentProps` (Ionic) ou `data` (Material). */
+export const OVERLAY_TITLE_PROPERTIES: ReadonlySet<string> = new Set(['header', 'title', 'titulo']);
