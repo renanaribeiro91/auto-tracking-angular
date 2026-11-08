@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.3.0 — 2026-11-08
+
+### Eventos
+
+- `subfuncionalidade` passa a ser enviada (nome da tela) em `click`, `screen_view`, `visualizacao` e eventos do `TRACKING_DISPATCHER`, sempre que o schema do consumidor a aceita; sem ela no schema, é omitida em vez de derrubar o evento. A planilha ganha a coluna **Subfuncionalidade**.
+- `tela` não repete o nome quando a tela é a própria funcionalidade (`app:saude:menu:menu` → `app:saude:menu`), no runtime e na planilha.
+- Novo evento `visualizacao` na abertura de overlays: modal, alerta, menu de opções e popover do Ionic (`ion*DidPresent`), `<dialog>`, Angular Material/CDK e `role=dialog` modal. `elemento` é o tipo do overlay e `rotulo` é o nome do overlay. O overlay interno de `ion-select` não gera visualização.
+- O CLI identifica os componentes abertos por API de overlay (`modalController.create`, `dialog.open`, services do projeto) e os overlays declarados no template. Grava neles o contrato da visualização e os lista na planilha: o rótulo enviado é o da planilha. Overlay sem nome provado gera `OVERLAY_NAME_UNPROVEN` (aviso) e não é instrumentado.
+
+### Rótulos
+
+- Inputs de texto de componentes (`texto`, `text`, `titulo`, `rotulo`), estáticos ou ligados a item de lista literal (inclusive lista importada de outro arquivo), são o rótulo.
+- Nome derivado do handler que só repete o tipo do controle (`clickLink` → `link`) não é usado como rótulo.
+- O texto das opções de `ion-segment`/`select`/`ion-radio-group` não vira rótulo do controle; a escolha segue em `opcao_selecionada_1`.
+
+### Hooks
+
+- `pre-push` verifica exatamente os commits enviados, numa cópia temporária quando o disco difere deles. Arquivos locais staged, não preparados ou novos nunca bloqueiam o push.
+- `pre-commit` aplica o tagueamento no projeto inteiro. Com staging parcial ou trabalho não preparado, taguea o conteúdo exato do índice e grava só nele, sem bloquear e sem levar o trabalho local para o commit.
+- O bloco instalado nos hooks não mudou: basta atualizar a lib.
+
 ## 2.2.3 — 2026-11-06
 
 ### Hooks
