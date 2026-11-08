@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2 — 2026-11-08
+
+- Componente já tagueado que não existe nas dependências instaladas (instalação incompleta) mantém a marcação e gera o aviso `COMPONENT_DEFINITION_MISSING`, em vez de perder eventos.
+- `verify` reprova só fontes sem tagueamento; relatório ou planilha local desatualizada vira aviso.
+- Identificador técnico (`tab-home-inicio`, `btn-…`) nunca vira rótulo. Inputs compostos de texto (`tabTitle`, `textoLabel`) são o rótulo quando o elemento tem um único gesto.
+
 ## 2.3.1 — 2026-11-08
 
 ### CLI

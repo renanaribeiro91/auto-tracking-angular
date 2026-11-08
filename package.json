@@ -1,6 +1,6 @@
 {
   "name": "auto-tracking-angular",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "private": false,
   "description": "Biblioteca Angular/Ionic para auto-tracking com análise causal, geração de tags e relatórios Excel/JSON",
   "type": "module",
