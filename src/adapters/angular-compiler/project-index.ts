@@ -7,7 +7,7 @@ import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
 import type { ComponentInfo, InlineTemplate, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
-import { PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
+import { OVERLAY_API, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
 export type { ComponentInfo, InlineTemplate, ProjectIndex } from '../../application/apply/ports/project-index.js';
 
 interface ClassRecord {
@@ -474,6 +474,7 @@ export class AngularProjectIndexer {
     const ambiguousRoutes: { file: string; className: string; line: number }[] = [];
     const opens = new Map<string, Set<string>>();
     const rawServiceOpens = new Map<string, Map<string, Set<string>>>();
+    const overlayComponents = new Map<string, string>();
     const surfaces: SurfaceDeclaration[] = [];
     const surfaceErrors: { file: string; line: number; message: string }[] = [];
     let providerCalls = 0;
@@ -555,6 +556,21 @@ export class AngularProjectIndexer {
           }
         }
 
+        // `modalController.create({ component: X })`, `dialog.open(X)`, `popoverCtrl.create(...)`, `bottomSheet.open(X)`
+        // ou um service do projeto com o mesmo papel: o componente passado é apresentado como overlay.
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const receiver = node.expression.expression;
+          const name = ts.isPropertyAccessExpression(receiver) ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : '';
+          const kind = OVERLAY_API.exec(name)?.[1]?.toLowerCase();
+          if (kind) {
+            for (const argument of node.arguments) {
+              for (const target of this.componentReferencesIn(argument, file, undefined, sourceFiles, recordsByName, recordsByFile)) {
+                if (!overlayComponents.has(target)) overlayComponents.set(target, kind === 'popover' ? 'popover' : 'modal');
+              }
+            }
+          }
+        }
+
         if (owner?.kind === 'service' && methodName && (ts.isNewExpression(node) || ts.isCallExpression(node))) {
           const references = node.arguments?.flatMap((argument) => [...this.componentReferencesIn(argument, file, undefined, sourceFiles, recordsByName, recordsByFile)]) ?? [];
           for (const target of references) this.addServiceOpen(rawServiceOpens, owner.key, methodName, target);
@@ -605,7 +621,7 @@ export class AngularProjectIndexer {
       };
       inspect(source);
     }
-    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles,
+    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents,
       dynamicMethodValues, eagerServices };
   }
 

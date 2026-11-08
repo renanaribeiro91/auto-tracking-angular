@@ -48,6 +48,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
     root.querySelector('p')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
     expect(sent).toEqual([{ name: 'click', params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'outro-fluxo',
+      subfuncionalidade: 'outra',
       tela: 'app-x:saude:outro-fluxo:outra', categoria: 'app-x:saude:outro-fluxo:outra', elemento: 'botao', rotulo: 'fechar-ajuda', acao: 'clique' } }]);
     detach(); detach();
     expect(root.hasAttribute('data-at-ref')).toBe(false);
@@ -70,7 +71,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
         root.querySelector('span')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
         await flush();
         expect(sent).toHaveLength(1);
-        expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:documentacao', rotulo: 'fechar-ajuda' });
+        expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', subfuncionalidade: 'documentacao', tela: 'app-x:saude:reembolso:documentacao', rotulo: 'fechar-ajuda' });
         detach();
         expect(root.hasAttribute('data-at-ref')).toBe(false);
         expect(warns).toEqual([]);
@@ -97,7 +98,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
       root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await flush();
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:outra' });
+      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', subfuncionalidade: 'outra', tela: 'app-x:saude:reembolso:outra' });
     } finally {
       deactivate();
     }
@@ -211,7 +212,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
       resolveEnvironment: async () => 'app-x', send: (event) => { sent.push(event); }, warn: (warning) => { warns.push(warning); } });
     root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
-    expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:manual' });
+    expect(sent[0]!.params).toMatchObject({ funcionalidade: 'reembolso', subfuncionalidade: 'manual', tela: 'app-x:saude:reembolso:manual' });
   });
 
   it('prioriza a rota ancestral do mesmo owner quando o elemento permanece dentro dela', async () => {
@@ -223,7 +224,7 @@ describe('superfícies TypeScript: ref, origem e gestos', () => {
     surfaces.attach(root, tagged([{ id: 'fechar', selector: '#fechar', elemento: 'botao', rotulo: 'Fechar' }]), surfaces.capture());
     root.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
-    expect(sent.filter((event) => event.name === 'click')[0]!.params).toMatchObject({ funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:pagina-visivel' });
+    expect(sent.filter((event) => event.name === 'click')[0]!.params).toMatchObject({ funcionalidade: 'reembolso', subfuncionalidade: 'pagina-visivel', tela: 'app-x:saude:reembolso:pagina-visivel' });
   });
 
   it('seleciona somente o rótulo público declarado para a ação', async () => {

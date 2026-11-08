@@ -91,6 +91,7 @@ describe('provider Angular/Ionic independente de aplicação específica', () =>
     origin.tela = 'outra-tela';
     await event;
     expect(sent).toEqual([{ name: 'modal_open', params: {
+      // schema sem subfuncionalidade: o complemento é omitido, o evento não é rejeitado
       ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso',
       tela: 'app-x:saude:reembolso:detalhes-documentacao', modal: 'indisponibilidade',
     } }]);

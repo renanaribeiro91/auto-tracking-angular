@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { labelSlug, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -13,7 +13,7 @@ import ts from 'typescript';
 export interface TagEntry {
   readonly id: string;
   readonly owner: string;
-  readonly evento: 'click' | 'screen_view';
+  readonly evento: 'click' | 'screen_view' | 'visualizacao';
   readonly acao: 'clique' | 'visualizacao';
   /** vazio em screen_view */
   readonly elemento: string;
@@ -68,6 +68,8 @@ export interface TagContext {
   /** linha do início do template no arquivo (template inline em .ts) */
   readonly lineOffset?: number;
   readonly mode?: 'classic' | 'ref';
+  /** Componente apresentado como overlay: tipo (`modal`, `popover`) e nome derivado do seletor, sem prefixo/sufixo técnico. */
+  readonly overlay?: { readonly elemento: string; readonly nome: string };
 }
 
 export interface TagResult {
@@ -161,6 +163,8 @@ export class TemplateTagger {
   private staticLabel(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>): string {
     const human = this.accessibleCandidates(attrs).find((value) => !looksLikeIdentifier(value));
     if (human) return human;
+    // Texto interno de controle de escolha são as opções (valor enviado em opcao_selecionada_1), não o nome do controle.
+    if (OPTION_CONTAINER_TAGS.has(tag)) return '';
     // conteúdo até o fechamento do próprio elemento, sem tags filhas (ion-label, span, ion-icon)
     const close = html.indexOf(`</${tag}`, tagEnd);
     const inner = html.slice(tagEnd, close === -1 ? html.indexOf('<', tagEnd) : close);
@@ -188,10 +192,10 @@ export class TemplateTagger {
    * pessoal/de negócio: nesse caso o texto nunca é lido e o rótulo semântico vale.
    */
   private dynamicLabelSource(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>): string | null {
-    const bound = ['[attr.aria-label]', '[aria-label]', '[label]', '[attr.title]', '[title]']
+    const bound = BOUND_LABEL_ATTRIBUTES
       .map((name) => attrs.get(name)).filter((value): value is string => !!value?.trim() && this.stringLiteral(value) === undefined);
     const close = html.indexOf(`</${tag}`, tagEnd);
-    const inner = close === -1 || ['select', 'ion-select', 'ion-radio-group', 'ion-segment'].includes(tag)
+    const inner = close === -1 || OPTION_CONTAINER_TAGS.has(tag)
       ? '' : html.slice(tagEnd, close).replace(/<!--[\s\S]*?-->/g, ' ');
     const interpolations = [...inner.matchAll(/\{\{\s*([\s\S]+?)\s*\}\}/g)].map((match) => match[1]!.replace(/\s+/g, ' '));
     const expressions = [...bound, ...interpolations];
@@ -228,7 +232,7 @@ export class TemplateTagger {
     if (personal(context)) return null;
     const close = html.indexOf(`</${tag}`, tagEnd);
     const bound = [...attrs].filter(([name]) => /^\[(?!attr\.data-|ngClass|class|style|ngStyle|id|attr\.id|attr\.data-testid)/.test(name)).map(([, value]) => value);
-    const expressions = ['[attr.aria-label]', '[aria-label]', '[label]', '[title]'].map((name) => attrs.get(name) ?? '')
+    const expressions = BOUND_LABEL_ATTRIBUTES.map((name) => attrs.get(name) ?? '')
       .concat(bound, [...html.slice(tagEnd, close < 0 ? tagEnd : close).matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((match) => match[1]!));
     let unproven = false;
     for (const expression of expressions) {
@@ -290,8 +294,7 @@ export class TemplateTagger {
     attrs: ReadonlyMap<string, string>, ctx: TagContext): string[] {
     const close = html.indexOf(`</${tag}`, tagEnd);
     const interpolation = close === -1 ? undefined : /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/.exec(html.slice(tagEnd, close))?.[1];
-    const expressions = ['[attr.aria-label]', '[aria-label]', '[label]', '[attr.title]', '[title]']
-      .map((name) => attrs.get(name)).concat(interpolation);
+    const expressions = BOUND_LABEL_ATTRIBUTES.map((name) => attrs.get(name)).concat(interpolation);
     for (const expression of expressions) {
       if (!expression) continue;
       const source = ts.createSourceFile('label.ts', `(${expression})`, ts.ScriptTarget.Latest, true);
@@ -327,13 +330,36 @@ export class TemplateTagger {
     return loops.at(-1)?.[1] ?? null;
   }
 
+  private viewContract(value: string): { id: string; elemento: string; rotulo: string } {
+    const [id = '', elemento = '', ...rotulo] = value.split('|');
+    return { id, elemento, rotulo: rotulo.join('|') };
+  }
+
+  /** Primeiro título do template (h1–h6, ion-title) com texto estático; título interpolado não é provável. */
+  private templateTitle(masked: string, from = 0, to = masked.length): string {
+    const heading = /<(h[1-6]|ion-title)\b[^>]*>([\s\S]*?)<\/\1\s*>/i.exec(masked.slice(from, to));
+    if (!heading || /\{\{|@(?:if|for|switch)\b/.test(heading[2]!)) return '';
+    return labelSlug(heading[2]!.replace(/<[^>]*>/g, ' '));
+  }
+
+  /** Nome do overlay inline: `header` estático, título do conteúdo ou o gatilho/estado que o abre, sem palavras técnicas. */
+  private inlineOverlayName(masked: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>): string {
+    const header = attrs.get('header') ?? this.stringLiteral(attrs.get('[header]') ?? '') ?? attrs.get('aria-label');
+    if (header?.trim()) return labelSlug(header);
+    const close = masked.indexOf(`</${tag}`, tagEnd);
+    const title = this.templateTitle(masked, tagEnd, close < 0 ? masked.length : close);
+    if (title) return title;
+    const source = attrs.get('trigger') ?? attrs.get('[trigger]') ?? attrs.get('[isOpen]') ?? attrs.get('[is-open]') ?? '';
+    return this.words(source).split('-').filter((word) => word && !OVERLAY_NAME_NOISE.has(word)).join('-');
+  }
+
   /** aria-label, label e title estáticos ou ligados a literal, na ordem de prioridade. */
   private accessibleCandidates(attrs: ReadonlyMap<string, string>): string[] {
     const literal = (name: string): string | undefined => {
       const bound = attrs.get(`[attr.${name}]`) ?? attrs.get(`[${name}]`);
       return bound === undefined ? undefined : this.stringLiteral(bound);
     };
-    return [literal('aria-label'), attrs.get('aria-label'), literal('label'), attrs.get('label'), literal('title'), attrs.get('title')]
+    return LABEL_ATTRIBUTES.flatMap((name) => [literal(name), attrs.get(name)])
       .filter((value): value is string => !!value?.trim());
   }
 
@@ -366,12 +392,12 @@ export class TemplateTagger {
     // editarLocal('local') não repete a palavra já presente no handler.
     const fromHandler = argument && `-${verb}-`.includes(`-${argument}-`) ? verb
       : [verb, argument].filter(Boolean).join('-');
-    if (fromHandler) return fromHandler;
+    if (fromHandler && !GENERIC_ELEMENT_LABEL.test(fromHandler)) return fromHandler;
     for (const alternative of alternatives) {
       const name = alternative ? this.semanticWords(alternative) : '';
-      if (name) return name;
+      if (name && !GENERIC_ELEMENT_LABEL.test(name)) return name;
     }
-    return '';
+    return fromHandler;
   }
 
   /** Identificador técnico já presente no elemento (aria-label de teste ou data-testid). */
@@ -462,6 +488,8 @@ export class TemplateTagger {
     const replacements: { at: number; length: number; text: string }[] = [];
     let screenPlaced = !ctx.isScreen;
     let skipScreenUntil = -1;
+    let viewPlaced = !ctx.overlay;
+    let skipViewUntil = -1;
     const q = ctx.attrQuote ?? '"';
     const claimed = ctx.claimedIds ?? new Set<string>();
     // O conteúdo projetado é transferido para o ion-modal. O anchor permanece
@@ -556,6 +584,7 @@ export class TemplateTagger {
         attrs.set('data-at-funcionalidade', prior.funcionalidade);
         attrs.set('data-at-tela', prior.tela);
         if (prior.screenId) attrs.set('data-at-screen', prior.screenId);
+        if (prior.view) attrs.set('data-at-view', `${prior.view.id}|${prior.view.elemento}|${prior.view.rotulo}`);
         if (prior.click) {
           attrs.set('data-at-id', prior.click.id);
           attrs.set('data-at-event', prior.click.event);
@@ -568,7 +597,7 @@ export class TemplateTagger {
       // contrato de identidade existente: não o reescrever por inferências
       // de layout. Para telas roteadas, o resolver usa o código da rota.
       const hasTracking = attrs.has('data-at-id') || attrs.has('data-at-outputs')
-        || attrs.has('data-at-overlay-outputs') || attrs.has('data-at-output-ref') || attrs.has('data-at-overlay-ref') || !!prior;
+        || attrs.has('data-at-overlay-outputs') || attrs.has('data-at-output-ref') || attrs.has('data-at-overlay-ref') || attrs.has('data-at-view') || !!prior;
       const funcionalidade = !ctx.isScreen && hasTracking
         ? attrs.get('data-at-funcionalidade') || ctx.funcionalidade : ctx.funcionalidade;
       const tela = !ctx.isScreen && hasTracking
@@ -598,12 +627,33 @@ export class TemplateTagger {
         entries.push(this.createEntry({ id: screenId, evento: 'screen_view', acao: 'visualizacao', elemento: '', rotulo: '', origem: 'rota', linha }, ctx, funcionalidade, tela));
       }
 
+      // Abertura de overlay: overlay inline do template ou raiz do componente apresentado por código.
+      if (!viewPlaced && tag === 'ng-template' && !m[0].endsWith('/>')) skipViewUntil = this.ngTemplateEnd(masked, m.index!);
+      const inlineOverlay = INLINE_OVERLAY_KIND[tag];
+      const overlayRoot = !viewPlaced && tag !== 'ng-container' && tag !== 'ng-template' && m.index! >= skipViewUntil;
+      if (overlayRoot) viewPlaced = true;
+      if (inlineOverlay || overlayRoot) {
+        const elemento = inlineOverlay ?? ctx.overlay!.elemento;
+        const rotulo = (inlineOverlay ? this.inlineOverlayName(masked, tag, tagEnd, attrs) : this.templateTitle(masked)) || ctx.overlay?.nome || '';
+        if (!rotulo) {
+          // Só o tipo ("modal") não identifica o overlay no painel: sem nome provado não há visualização.
+          diagnostics.push({ code: 'OVERLAY_NAME_UNPROVEN', arquivo: ctx.relFile, linha,
+            mensagem: `<${tag}> sem header, título estático ou gatilho nomeado: visualizacao não instrumentada; adicione header ou aria-label` });
+        } else {
+          const viewId = this.claimId(attrs.get('data-at-view')?.split('|')[0], `${prefix}-${this.shortName(rotulo)}-visualizacao`, ctx, claimed);
+          desired.set('data-at-view', `${viewId}|${elemento}|${rotulo}`);
+          derived.add('data-at-view');
+          entries.push(this.createEntry({ id: viewId, evento: 'visualizacao', acao: 'visualizacao', elemento, rotulo,
+            origem: inlineOverlay ? `<${tag}>` : 'abertura do overlay', linha }, ctx, funcionalidade, tela));
+        }
+      }
+
       const label = tag === 'form' && (attrs.has('(ngSubmit)') || attrs.has('(submit)'))
         ? ''
         : this.staticLabel(html, tag, tagEnd, attrs);
       const rotulos = label ? [] : this.provenLabels(masked, m.index!, html, tag, tagEnd, attrs, ctx);
       // Texto de menu/serviço muda sem novo build: o runtime lê o valor visível no clique.
-      const boundLabel = ['[attr.aria-label]', '[aria-label]', '[label]', '[attr.title]', '[title]']
+      const boundLabel = BOUND_LABEL_ATTRIBUTES
         .some((name) => attrs.has(name) && this.stringLiteral(attrs.get(name)!) === undefined);
       const dynamicSource = (label && !boundLabel) || rotulos.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs);
       const dynamicIds: string[] = [];
@@ -799,6 +849,7 @@ export class TemplateTagger {
           ...(overlay.length ? { overlayOutputs: overlay } : {}),
           ...(rotulos.length && (clickId || bindings.length || overlay.length) ? { rotulos } : {}),
           ...(dynamicIds.length ? { rotuloDinamico: dynamicIds } : {}),
+          ...(desired.get('data-at-view') ? { view: this.viewContract(desired.get('data-at-view')!) } : {}),
         };
         const ref = encodeTrackingToken(element);
         for (let index = entryStart; index < entries.length; index++) entries[index] = { ...entries[index]!, ref };

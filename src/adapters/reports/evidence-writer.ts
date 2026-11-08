@@ -8,7 +8,7 @@ import type { EvidenceRow as Row, ModuleRow, WorkbookBranding, WorkbookInput } f
 import { createWorksheetBackground } from './watermark-background.js';
 import { loadWorkbookProvider } from './excel-workbook.js';
 import { inspectXlsx, readBoundedFile, readBrandingPng, XLSX_LIMITS } from './xlsx-safety.js';
-import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
+import { ORIGIN_SCREEN, isStaticScreenReference, screenPath } from '../../domain/contract/screen-binding.js';
 
 export type { WorkbookBranding, WorkbookInput } from './evidence-writer.types.js';
 
@@ -133,15 +133,16 @@ export class EvidenceWorkbookWriter {
         const parts = screenRef?.split(':');
         const modulo = parts?.[0] ?? entry.funcionalidade;
         const screenName = parts?.[1] ?? '';
-        const screen = `{ambiente}:${input.product}:${screenRef ? `${modulo}:${screenName}` : '{funcionalidade-de-origem}:{tela-de-origem}'}`;
+        const screen = `{ambiente}:${input.product}:${screenRef ? screenPath(modulo, screenName) : '{funcionalidade-de-origem}:{tela-de-origem}'}`;
         rows.push({
           modulo,
           id: entry.id,
           evento: entry.evento,
           acao: entry.acao,
           elemento: entry.elemento,
+          subfuncionalidade: screenRef ? screenName : '{tela-de-origem}',
           tela: screen,
-          categoria: entry.evento === 'click' ? screen : '',
+          categoria: entry.evento === 'screen_view' ? '' : screen,
           rotulo: entry.rotulos?.length ? `Um de: ${entry.rotulos.join('; ')}` : entry.rotulo,
           opcaoSelecionada: entry.opcao_selecionada_1 ?? '',
           origem: entry.origem,

@@ -28,6 +28,8 @@ export interface TrackingElement {
   readonly rotuloDinamico?: readonly string[];
   /** Regras completas da superfície TS; impede usar ref anterior a uma alteração. */
   readonly surfaceContract?: string;
+  /** Raiz de overlay (componente aberto como modal/popover ou overlay inline): contrato da `visualizacao` na abertura. */
+  readonly view?: { readonly id: string; readonly elemento: string; readonly rotulo: string };
   /** O gesto só pode sair com a tela capturada no owner ou provada pela rota ancestral. */
   readonly requireOrigin?: boolean;
 }

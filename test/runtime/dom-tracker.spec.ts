@@ -20,7 +20,7 @@ const at = (owner: string, id: string, extra = '') =>
 
 const clickPayload = (tela: string, rotulo: string, extra: Record<string, string> = {}) => ({
   name: 'click',
-  params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', tela: `app-x:saude:reembolso:${tela}`, categoria: `app-x:saude:reembolso:${tela}`, elemento: 'botao', rotulo, acao: 'clique', ...extra },
+  params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', subfuncionalidade: tela, tela: `app-x:saude:reembolso:${tela}`, categoria: `app-x:saude:reembolso:${tela}`, elemento: 'botao', rotulo, acao: 'clique', ...extra },
 });
 
 describe('runtime: interação compartilhada exige origem comprovada', () => {
@@ -293,7 +293,7 @@ describe('runtime: emissão no formato do Builder do time', () => {
     document.body.appendChild(modal);
     click('#excluir');
     await flush();
-    expect(fed[0]!.params).toMatchObject({ funcionalidade: 'componentes', tela: 'app-x:saude:componentes:card', rotulo: 'excluir' });
+    expect(fed[0]!.params).toMatchObject({ funcionalidade: 'componentes', subfuncionalidade: 'card', tela: 'app-x:saude:componentes:card', rotulo: 'excluir' });
     expect(mob).toHaveLength(1); // screen_view, mas nenhum click do FED
   });
 
@@ -743,6 +743,6 @@ describe('runtime: emissão no formato do Builder do time', () => {
     emitScreenView(document, 'app-tipo', deps('mfe-exemplo', fed));
     await flush();
     expect(mob).toHaveLength(0);
-    expect(fed).toEqual([{ name: 'screen_view', params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', tela: 'app-x:saude:reembolso:tipo-documento' } }]);
+    expect(fed).toEqual([{ name: 'screen_view', params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'reembolso', subfuncionalidade: 'tipo-documento', tela: 'app-x:saude:reembolso:tipo-documento' } }]);
   });
 });

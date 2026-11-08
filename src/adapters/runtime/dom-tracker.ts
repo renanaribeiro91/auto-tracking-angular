@@ -1,6 +1,6 @@
 // T09–T14 — emissão runtime: gesto DOM → elemento marcado → owner → tela atual → schema → send
 import { validateEvent, type TrackingSchema } from '../../domain/contract/schema.js';
-import { labelSlug, MAX_PROVEN_LABEL, slug } from '../../domain/contract/slug.js';
+import { labelSlug, MAX_PROVEN_LABEL, overlayComponentName, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
 import type { TrackingElement } from '../../domain/contract/tracking-element.js';
 import { TrackingTokenCache } from '../../domain/contract/tracking-token.js';
@@ -8,8 +8,9 @@ import type { TrackingSurfaceDefinition } from '../../domain/contract/tracking-s
 import { trackingSurfaceContract } from '../../domain/contract/tracking-surface.js';
 import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
-import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_KIND, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
+import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
+import { screenPath } from '../../domain/contract/screen-binding.js';
 
 export interface DomTrackerDeps {
   /** Host Angular opcional; limita a varredura inicial sem restringir overlays. */
@@ -25,6 +26,8 @@ export interface DomTrackerDeps {
 }
 
 type Params = Record<string, string>;
+/** Hierarquia que a lib sempre conhece, mas que nem todo schema de consumidor aceita. */
+const OPTIONAL_PARAMS = ['subfuncionalidade'] as const;
 export interface TrackingScreen {
   readonly funcionalidade: string;
   readonly tela: string;
@@ -245,6 +248,21 @@ export class DomEventTracker {
     };
 
     const onDismiss = (): void => this.settleChoice();
+    const viewed = new WeakSet<Element>();
+    const showOverlay = (overlay: unknown): void => {
+      try { if (DomEventTracker.isElement(overlay)) this.emitOverlayView(overlay); }
+      catch (error) { this.warnSafely(`[auto-tracking] visualização ignorada com segurança: ${String(error)}`); }
+    };
+    const onPresent = (event: Event): void => showOverlay(event.target);
+    // Diálogo fora do Ionic: uma visualização por instância aberta (o mesmo <dialog> reaberto conta de novo).
+    const showDialogs = (node: Element): void => {
+      const dialogs = node.matches(NATIVE_DIALOG_SELECTOR) ? [node] : Array.from(node.querySelectorAll(NATIVE_DIALOG_SELECTOR));
+      for (const dialog of dialogs) {
+        if (viewed.has(dialog) || dialog.closest(IONIC_OVERLAY_SELECTOR) || dialog.parentElement?.closest(NATIVE_DIALOG_SELECTOR)) continue;
+        viewed.add(dialog);
+        showOverlay(dialog);
+      }
+    };
     const registered = new Set<string>();
     const listen = (name: string): void => {
       if (!/^[A-Za-z][\w:-]*$/.test(name) || registered.has(name)) return;
@@ -274,10 +292,14 @@ export class DomEventTracker {
       try {
         for (const record of records) {
           if (record.type === 'attributes' && DomEventTracker.isElement(record.target)) {
-            scheduler.changed(record.target);
+            if (record.attributeName === 'open') {
+              if (record.target.hasAttribute('open')) showDialogs(record.target); else viewed.delete(record.target);
+            } else scheduler.changed(record.target);
           }
           for (const node of Array.from(record.addedNodes)) {
-            if (DomEventTracker.isElement(node)) scheduler.added(node);
+            if (!DomEventTracker.isElement(node)) continue;
+            scheduler.added(node);
+            showDialogs(node);
           }
         }
       } catch (error) {
@@ -290,6 +312,7 @@ export class DomEventTracker {
       scheduler.stop();
       for (const eventName of registered) this.document.removeEventListener(eventName, onEvent, true);
       for (const name of OVERLAY_DISMISS_EVENTS) this.document.removeEventListener(name, onDismiss, true);
+      for (const name of OVERLAY_PRESENT_EVENTS) this.document.removeEventListener(name, onPresent, true);
       this.pendingChoice = null;
       registered.clear();
     };
@@ -298,6 +321,7 @@ export class DomEventTracker {
       // de CustomEvents é incremental, não uma varredura bloqueante.
       TRACKED_DOM_EVENTS.forEach(listen);
       for (const name of OVERLAY_DISMISS_EVENTS) this.document.addEventListener(name, onDismiss, true);
+      for (const name of OVERLAY_PRESENT_EVENTS) this.document.addEventListener(name, onPresent, true);
       let initialRoot = documentRoot;
       if (this.deps.root) {
         try { initialRoot = this.document.querySelector(this.deps.root) ?? documentRoot; }
@@ -308,7 +332,7 @@ export class DomEventTracker {
       observer?.observe(documentRoot, {
         subtree: true, childList: true, attributes: true,
         attributeFilter: ['data-at-event', 'data-at-outputs', 'data-at-overlay-outputs',
-          'data-at-output-ref', 'data-at-ref', 'data-at-owner'],
+          'data-at-output-ref', 'data-at-ref', 'data-at-owner', 'open'],
       });
     } catch (error) {
       stop();
@@ -567,6 +591,47 @@ export class DomEventTracker {
   }
 
   /**
+   * Abertura de overlay: `visualizacao` na tela visível do owner que o apresentou. Com contrato do CLI
+   * (overlay inline ou raiz do componente apresentado), rótulo e tipo são os da planilha; sem ele, o nome público
+   * do overlay. Overlay interno de um select já é o clique de abertura do controle.
+   */
+  private emitOverlayView(overlay: Element): void {
+    if (!overlay.matches(`${OVERLAY_SELECTOR}, ${NATIVE_DIALOG_SELECTOR}`) || overlay.matches(SELECT_OVERLAY_SELECTOR) || this.pendingChoice) return;
+    const mode = this.deps.mode ?? 'classic';
+    const contract = [overlay, ...Array.from(overlay.querySelectorAll('[data-at-ref], [data-at-view]'))]
+      .map((element) => DomEventTracker.viewOf(element, mode)).find((view) => view !== null);
+    if (contract && contract.owner !== this.deps.owner) return;
+    const screen = this.deps.surfaces?.capture(this.deps.owner) ?? (contract && !contract.requireOrigin ? contract.screen : null);
+    if (!screen) {
+      if (contract) this.warnSafely(`[auto-tracking] visualizacao '${contract.id}' não enviada: tela de origem não capturada`);
+      return;
+    }
+    const elemento = contract?.elemento ?? DomEventTracker.overlayKind(overlay);
+    const label = contract?.rotulo ?? DomEventTracker.overlayName(overlay);
+    if (!label) {
+      // Só o tipo ("modal") não diz ao produto qual overlay abriu: sem nome público não há visualização.
+      this.warnSafely(`[auto-tracking] visualizacao de ${elemento} sem título nem componente identificável; evento não enviado`);
+      return;
+    }
+    const build = (environment: string, product: string): Params => {
+      const base = DomEventTracker.baseParams(screen, environment, product);
+      return { ...base, categoria: base['tela']!, elemento, rotulo: label, acao: 'visualizacao' };
+    };
+    void this.dispatch('visualizacao', build, contract?.id ?? `overlay-${label}`).catch((error) => this.warnSafely(`[auto-tracking] falha no envio: ${String(error)}`));
+  }
+
+  /** Contrato de visualização gravado pelo CLI no elemento (token `ref` ou `data-at-view` no modo classic). */
+  private static viewOf(element: Element, mode: TrackingMode): { owner: string; id: string; elemento: string; rotulo: string; screen: Screen | null; requireOrigin: boolean } | null {
+    const descriptor = this.descriptorOf(element, mode);
+    if (descriptor) return descriptor.view ? { owner: descriptor.owner, ...descriptor.view,
+      screen: { funcionalidade: descriptor.funcionalidade, tela: descriptor.tela }, requireOrigin: !!descriptor.requireOrigin } : null;
+    const [id, elemento, ...rotulo] = mode === 'ref' ? [] : (element.getAttribute('data-at-view') ?? '').split('|');
+    const owner = element.getAttribute('data-at-owner');
+    return id && elemento && rotulo.length && owner ? { owner, id, elemento, rotulo: rotulo.join('|'),
+      screen: this.markerScreen(element), requireOrigin: element.getAttribute('data-at-origin') === 'required' } : null;
+  }
+
+  /**
    * Controle de escolha que abre seu próprio overlay atualiza o valor por código ao fechar:
    * o Ionic não emite ionChange nesse caso. A escolha é lida do valor exibido pelo controle.
    */
@@ -672,7 +737,7 @@ export class DomEventTracker {
       return;
     }
 
-    const event: TrackingEvent = { name, params: build(environment, this.deps.product) };
+    const event: TrackingEvent = { name, params: DomEventTracker.fitSchema(name, build(environment, this.deps.product), this.deps.schema) };
     const validation = validateEvent(event, this.deps.schema);
     if (validation.kind !== 'valid') {
       this.warnSafely(`[auto-tracking] ${name} '${origin}' rejeitado pelo schema: ${validation.kind} ${validation.params.join(',')}`);
@@ -717,12 +782,31 @@ export class DomEventTracker {
 
   /** Título público do overlay (aria-labelledby, aria-label ou cabeçalho visível); sem título, o tipo do overlay. */
   private static overlayContext(overlay: Element, target: Element): string {
+    return DomEventTracker.overlayTitle(overlay, target) || DomEventTracker.overlayKind(overlay);
+  }
+
+  private static overlayTitle(overlay: Element, target?: Element): string {
     const labelledBy = overlay.getAttribute('aria-labelledby')?.split(/\s+/).map((id) => overlay.ownerDocument.getElementById(id))
       .find((element): element is HTMLElement => !!element);
     const heading = labelledBy ?? (overlay.hasAttribute('aria-label') ? overlay
-      : Array.from(overlay.querySelectorAll(OVERLAY_TITLE_SELECTOR)).find((element) => !target.contains(element) && !element.contains(target)));
-    const title = heading ? DomEventTracker.currentLabel(heading) : '';
-    return title || DomEventTracker.overlayKind(overlay);
+      : Array.from(overlay.querySelectorAll(OVERLAY_TITLE_SELECTOR)).find((element) => !target || (!target.contains(element) && !element.contains(target))));
+    return heading ? DomEventTracker.currentLabel(heading) : '';
+  }
+
+  /**
+   * Nome do overlay na visualização: título público; sem ele, o componente apresentado
+   * (`app-indisponibilidade-temporaria-modal` → `indisponibilidade-temporaria`); vazio quando nenhum existe.
+   */
+  private static overlayName(overlay: Element): string {
+    // O componente apresentado é o elemento customizado mais próximo da raiz (Ionic: filho; CDK: dentro da superfície).
+    let level = Array.from(overlay.children);
+    let component: Element | undefined;
+    for (let depth = 0; depth < 3 && level.length && !component; depth++) {
+      component = level.find((element) => element.localName.includes('-') && !/^(?:ion|mat|cdk)-/.test(element.localName));
+      level = level.flatMap((element) => Array.from(element.children));
+    }
+    const name = component ? overlayComponentName(component.localName) : '';
+    return DomEventTracker.overlayTitle(overlay) || name;
   }
 
   private static overlayKind(overlay: Element): string {
@@ -769,8 +853,16 @@ export class DomEventTracker {
     return labels.every((label): label is string => label !== null) ? labels.join(',') : null;
   }
 
-  private static baseParams(screen: Screen, environment: string, product: string): Params {
-    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, tela: `${environment}:${product}:${screen.funcionalidade}:${screen.tela}` };
+  /** Parâmetro complementar só sai se o schema do consumidor o aceita: nunca derruba o evento por isso. */
+  static fitSchema(name: string, params: Params, schema: TrackingSchema): Params {
+    const rule = schema[name];
+    for (const optional of OPTIONAL_PARAMS) if (rule && !rule.allowedParams.includes(optional)) delete params[optional];
+    return params;
+  }
+
+  static baseParams(screen: Screen, environment: string, product: string): Params {
+    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, subfuncionalidade: screen.tela,
+      tela: `${environment}:${product}:${screenPath(screen.funcionalidade, screen.tela)}` };
   }
 }
 

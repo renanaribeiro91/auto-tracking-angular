@@ -53,7 +53,6 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 | `data-at-id` | elemento interativo | ID estável da interação |
 | `data-at-owner` | todos os marcados | `runtime.owner` do projeto (ex.: `app`, `mfe`) |
 | `data-at-funcionalidade` | todos os marcados | derivado do caminho do template |
-| `data-at-subfuncionalidade` | todos os marcados | nome do componente |
 | `data-at-elemento` | elemento interativo | `botao`, `link`, `dropdown`, `checkbox`, `accordion`, `lista` ou `filtro` |
 | `data-at-event` | `ion-select`, `ion-checkbox`, `ion-toggle`, `ion-segment`… | `ionChange` (padrão: `click`) |
 | `data-at-screen` | 1º elemento renderizado do componente roteado | ID da tela |
@@ -71,7 +70,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 - **Unicidade**: duas telas nunca compartilham `módulo:tela`. Se colidirem, só as envolvidas são refinadas — primeiro pela pasta da tela e depois pelo caminho completo. Se uma rota usa um nome de classe homônimo sem import que identifique a declaração, o CLI registra `ROUTED_COMPONENT_AMBIGUOUS` em vez de associar as telas por engano.
 - Módulo e tela são sempre regravados a partir da estrutura atual (mudou a pasta, o template acompanha). O ID gerado para o mesmo gesto é estável entre execuções.
 - **ID**: `<módulo>-<tela>-<nome>`, `nome` = primeiras palavras do rótulo.
-- **Rótulo**, em ordem: `aria-label`/`label`/`title` humanos (estáticos ou literal ligado); texto próprio do elemento (em componente customizado, só se curto, pois o conteúdo é projetado); rótulo único de um filho; nome do handler sem palavras de código (`cliqueVoltar` → `voltar`); `data-testid`/id de teste sem prefixo técnico. Nunca vazio. O owner não compõe o ID; trocar `runtime.owner` atualiza todos os atributos de ownership mantendo IDs estáveis.
+- **Rótulo**, em ordem: `aria-label`/`label`/`title`/`texto`/`text`/`titulo`/`rotulo` humanos (estáticos ou literal ligado); texto próprio do elemento (em componente customizado, só se curto, pois o conteúdo é projetado); rótulo único de um filho; nome do handler sem palavras de código (`cliqueVoltar` → `voltar`); `data-testid`/id de teste sem prefixo técnico. Nunca vazio. O owner não compõe o ID; trocar `runtime.owner` atualiza todos os atributos de ownership mantendo IDs estáveis.
 - **Tela de um componente**: o motor sobe até a rota por todos os caminhos de Angular — seletor em template, referência na classe, cadeia de serviços (inclusive `ModalService`/use-cases) e effects NgRx (pela action despachada). Componente sem nenhum uso e a casca do app (`app-root`) não entram na planilha; no runtime, emitem com a tela onde o usuário está.
 
 ## Runtime
@@ -89,17 +88,24 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 
 ### Payload
 
-| Campo | `click` | `screen_view` |
-|---|---|---|
-| `ambiente` | resolvido pelo preset do aplicativo | idem |
-| `produto` | `runtime.product` | idem |
-| `funcionalidade` | do contexto da tela (`classic`) ou do token (`ref`) | idem |
-| `tela` | `<ambiente>:<produto>:<tela>` | idem |
-| `categoria` | igual a `tela` | — |
-| `acao` | `clique` | não enviada |
-| `elemento` | atributo (`classic`) ou token decodificado (`ref`) | não enviado |
-| `rotulo` | rótulo do contrato (igual à planilha); em item de lista estática, o valor provado do item clicado | — |
-| `opcao_selecionada_1` | opção escolhida (`ionChange`) | — |
+| Campo | `click` | `screen_view` | `visualizacao` (abertura de overlay) |
+|---|---|---|---|
+| `ambiente` | resolvido pelo preset do aplicativo | idem | idem |
+| `produto` | `runtime.product` | idem | idem |
+| `funcionalidade` | do contexto da tela (`classic`) ou do token (`ref`) | idem | da tela visível do owner que apresentou o overlay |
+| `subfuncionalidade` | nome da tela; enviado só se o schema do consumidor o aceita | idem | idem |
+| `tela` | `<ambiente>:<produto>:<funcionalidade>:<tela>`; só `<tela>` quando igual à funcionalidade (`menu:menu` → `menu`) | idem | idem |
+| `categoria` | igual a `tela` | — | igual a `tela` |
+| `acao` | `clique` | não enviada | `visualizacao` |
+| `elemento` | atributo (`classic`) ou token decodificado (`ref`); em overlay sem marcação, o tipo do overlay | não enviado | `modal`, `alerta`, `menu-de-opcoes` ou `popover` |
+| `rotulo` | rótulo do contrato (igual à planilha); em item de lista estática, o valor provado do item clicado | — | título público do overlay; sem ele, o componente apresentado sem prefixo/sufixo técnico (`app-erro-generico-modal` → `erro-generico`); por último, o tipo |
+| `opcao_selecionada_1` | opção escolhida (`ionChange`) | — | — |
+
+A `visualizacao` sai no evento Ionic de apresentação (`ionModalDidPresent`, `ionAlertDidPresent`, `ionActionSheetDidPresent`, `ionPopoverDidPresent`). Fora do Ionic, sai quando o diálogo entra no DOM ou abre: `<dialog open>`, `mat-dialog-container`, `mat-bottom-sheet-container` e `[role=dialog][aria-modal=true]`/`[role=alertdialog]`, uma vez por abertura. O overlay interno de um `ion-select` não gera visualização, porque a abertura já é o clique do controle.
+
+**Contrato estático (planilha = envio):** o CLI identifica os componentes passados a uma API de overlay, isto é, uma chamada cujo receptor tem `modal`, `dialog`, `popover` ou `sheet` no nome (`modalController.create({ component })`, `dialog.open(X)` ou um service do projeto). Na raiz do template desses componentes, grava o contrato da visualização (`id`, `elemento`, `rotulo`) no token `ref` ou em `data-at-view` (modo `classic`). O mesmo vale para `<ion-modal>`, `<ion-popover>`, `<ion-alert>` e `<ion-action-sheet>` declarados no template. O rótulo vem, nesta ordem, de `header`/`aria-label`, do primeiro título estático (`h1`–`h6`, `ion-title`) e do nome do componente pelo seletor (`app-erro-generico-modal` → `erro-generico`); num overlay inline, por último, do `trigger`/`[isOpen]` sem palavras técnicas. A planilha lista essas visualizações, e o runtime envia o contrato gravado, não o texto exibido no momento. Um overlay sem nome provado gera o diagnóstico `OVERLAY_NAME_UNPROVEN` e não é instrumentado: só o tipo (`modal`) não identifica o overlay no painel. Overlays de terceiros sem contrato usam o título exibido ou o componente apresentado; sem nenhum dos dois, não há envio e o console recebe um aviso.
+
+**Rótulo de componente customizado:** inputs de texto (`texto`, `text`, `titulo`, `rotulo`, além de `aria-label`/`label`/`title`), estáticos ou ligados a item de lista literal (inclusive lista importada de outro arquivo), são o rótulo. Um nome derivado do handler que só repete o tipo do controle (`clickLink` → `link`) não é usado como rótulo.
 
 ### Identidade de ambiente
 

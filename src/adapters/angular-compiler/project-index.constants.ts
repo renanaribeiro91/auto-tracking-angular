@@ -9,3 +9,6 @@ export const TEST_DOUBLE_CLASS_PATTERN = /(Mock|Stub|Fake)(Component|Page)?$/;
 
 /** Arquivos que inicializam ou exercitam testes não representam componentes de produção. */
 export const TEST_INFRASTRUCTURE_FILE_PATTERN = /(?:\.spec|\.test|\.e2e|\.cy|setup-(?:jest|tests?)|test-setup)\.ts$/;
+
+/** Receptor de API que apresenta um componente como overlay (Ionic, Angular Material/CDK ou service do projeto). */
+export const OVERLAY_API = /(modal|dialog|popover|sheet)/i;

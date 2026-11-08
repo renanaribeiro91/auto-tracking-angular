@@ -79,13 +79,9 @@ export class TrackingDispatcher {
       console.warn(`[auto-tracking] ${name} não enviado: ambiente não resolvido`);
       return;
     }
-    const event: TrackingEvent = { name, params: {
-      ...attributes,
-      ambiente: environment,
-      produto: this.options.product,
-      funcionalidade: screen.funcionalidade,
-      tela: `${environment}:${this.options.product}:${screen.funcionalidade}:${screen.tela}`,
-    } };
+    const event: TrackingEvent = { name, params: DomEventTracker.fitSchema(name, {
+      ...attributes, ...DomEventTracker.baseParams(screen, environment, this.options.product),
+    }, this.options.preset.schema) };
     const validation = validateEvent(event, this.options.preset.schema);
     if (validation.kind !== 'valid') {
       throw new Error(`[auto-tracking] ${name} rejeitado pelo schema: ${validation.kind} ${validation.params.join(',')}`);

@@ -12,3 +12,11 @@ export const OVERLAY_TITLE_SELECTOR = 'h1, h2, h3, h4, h5, h6, [role="heading"],
 /** Tipo do overlay enviado em `elemento` (e contexto quando não há título); o restante é modal. */
 export const OVERLAY_KIND: Readonly<Record<string, string>> = { 'ion-modal': 'modal', 'ion-alert': 'alerta', 'ion-action-sheet': 'menu-de-opcoes', 'ion-popover': 'popover' };
 export const CURRENT_SCREEN_ATTRIBUTE = 'data-at-current-screen';
+/** Apresentação de overlays Ionic: abre a `visualizacao` do modal/alerta/menu/popover. */
+export const OVERLAY_PRESENT_EVENTS = ['ionModalDidPresent', 'ionPopoverDidPresent', 'ionActionSheetDidPresent', 'ionAlertDidPresent'] as const;
+/** Overlay que o próprio ion-select abre: a abertura já é o clique do controle. */
+export const SELECT_OVERLAY_SELECTOR = '.select-alert, .select-action-sheet, .select-popover, .select-modal';
+/** Diálogos fora do Ionic (nativo, Angular Material/CDK, componente acessível): visualização ao entrar no DOM ou abrir. */
+export const NATIVE_DIALOG_SELECTOR = 'dialog[open], mat-dialog-container, mat-bottom-sheet-container, [role="dialog"][aria-modal="true"], [role="alertdialog"]';
+/** Overlays do Ionic: a visualização vem do evento de apresentação, nunca da inserção no DOM. */
+export const IONIC_OVERLAY_SELECTOR = 'ion-modal, ion-popover, ion-alert, ion-action-sheet, ion-loading, ion-toast, ion-picker';

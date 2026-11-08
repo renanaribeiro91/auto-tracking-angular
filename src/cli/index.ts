@@ -10,7 +10,7 @@ import { OutputPathResolver, type ResolvedPaths } from '../adapters/filesystem/p
 import type { PipelineResult, PlannedChange, TrackingPipeline } from '../application/apply/pipeline.js';
 import type { EvidenceWorkbookWriter, WorkbookBranding } from '../adapters/reports/evidence-writer.js';
 import { BLOCKING_DIAGNOSTIC_CODES, CLI_EXIT_CODES, CLI_HELP_TEXT } from './constants.js';
-import { GIT_HOOK_NAMES, GIT_HOOK_PURPOSE, GitRepository, installedVersionMismatch, type GitHookName } from './git-hooks.js';
+import { GIT_HOOK_NAMES, GIT_HOOK_PURPOSE, GitRepository, installedVersionMismatch, pushedCommits, type GitHookName } from './git-hooks.js';
 
 type Summary = Record<string, number>;
 
@@ -437,54 +437,85 @@ class AutoTrackingCli {
   }
 
   /**
-   * pre-commit: aplica o tagueamento e inclui no commit só o que a lib escreveu.
-   * pre-push: apenas verifica; o push nunca leva código sem tagueamento commitado.
+   * pre-commit: aplica o tagueamento no projeto inteiro e inclui no commit o que a lib escreveu.
+   * pre-push: verifica exatamente os commits enviados; o disco local não interfere.
    */
   private async runHook(hook: GitHookName, root: string, configFile: string): Promise<number> {
     const log = (message: string) => process.stderr.write(`[auto-tracking] ${message}\n`);
     const mismatch = installedVersionMismatch(root, 'auto-tracking-angular', this.packageVersion());
     if (mismatch) throw new Error(mismatch);
     const repository = GitRepository.at(root);
-
-    if (hook === 'pre-push') {
-      const report = await this.run('verify', root, configFile, false, undefined, false);
-      const uncommitted = repository.uncommittedTrackingInputs();
-      if (report.status === 'valid' && uncommitted.length === 0) return CLI_EXIT_CODES.valid;
-      for (const issue of [...(report.pendencias ?? []), ...uncommitted.map((file) => `fonte não commitada: ${file}`)]) log(issue);
-      for (const diagnostic of report.diagnosticos ?? []) {
-        if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
-      }
-      log('push bloqueado: faça um commit (o pre-commit atualiza o tagueamento) e repita o push.');
-      return CLI_EXIT_CODES.incomplete;
-    }
-
-    const unstagedBefore = repository.unstagedFiles();
-    const untrackedBefore = repository.untrackedFiles();
-    const partial = repository.partiallyStagedTrackingInputs(unstagedBefore);
-    if (partial.length) {
-      for (const file of partial) log(`alterações parcialmente preparadas: ${file}`);
-      log('commit bloqueado: prepare a versão completa dos arquivos listados antes de executar o tagueamento automático.');
-      return CLI_EXIT_CODES.incomplete;
-    }
-    const report = await this.run('apply', root, configFile, false, (changes) => changes
-      .map((change) => repository.relative(change.file))
-      .filter((file) => unstagedBefore.has(file) || untrackedBefore.has(file))
-      .map((file) => `alterações não preparadas: ${file}`));
-    const written = (report.written ?? []).map((file) => repository.relative(path.resolve(root, file)));
-    if (report.status !== 'valid') {
+    const blocking = (report: Report): void => {
       for (const issue of report.pendencias ?? []) log(issue);
       for (const diagnostic of report.diagnosticos ?? []) {
         if (BLOCKING_DIAGNOSTIC_CODES.has(diagnostic.code)) log(`${diagnostic.code} ${diagnostic.arquivo}:${diagnostic.linha} ${diagnostic.mensagem}`);
       }
-      log('commit bloqueado: tagueamento incompleto (detalhes acima).');
+    };
+
+    if (hook === 'pre-push') {
+      const head = repository.head();
+      const commits = pushedCommits(this.pushInput());
+      const relativeConfig = path.relative(root, configFile);
+      let blocked = false;
+      for (const sha of commits.length ? commits : [head]) {
+        // Disco igual ao commit (caso comum): verifica no lugar; senão, numa cópia limpa do commit.
+        const report = sha === head && repository.uncommittedTrackingInputs(root).length === 0
+          ? await this.run('verify', root, configFile, false, undefined, false)
+          : await repository.atCommit(sha, root, (project) => this.run('verify', project, path.join(project, relativeConfig), false, undefined, false));
+        if (report.status === 'valid') continue;
+        blocked = true;
+        log(`commit ${sha.slice(0, 10)} sem o tagueamento atualizado:`);
+        blocking(report);
+      }
+      if (!blocked) return CLI_EXIT_CODES.valid;
+      log('push bloqueado: rode `npx auto-tracking`, faça commit do resultado (o pre-commit já faz isso) e repita o push.');
       return CLI_EXIT_CODES.incomplete;
     }
-    // Artefatos gerados permanecem locais; apenas fontes alteradas entram no commit.
-    const outputDir = `${repository.relative(path.dirname(path.resolve(root, report.planilha)))}/`;
-    const toStage = repository.trackable(written.filter((file) => !file.startsWith(outputDir)));
-    repository.stage(toStage);
-    if (toStage.length) log(`${toStage.length} arquivo(s) de tagueamento atualizados e incluídos neste commit.`);
+
+    const unstaged = repository.unstagedFiles();
+    const untracked = repository.untrackedFiles();
+    const outputOf = (report: Report, base: string): string => `${path.relative(base, path.dirname(path.resolve(base, report.planilha))).split(path.sep).join('/')}/`;
+    const sources = (report: Report, base: string): string[] => (report.written ?? [])
+      .map((file) => path.relative(base, path.resolve(base, file)).split(path.sep).join('/'))
+      .filter((file) => !file.startsWith(outputOf(report, base)));
+
+    // Caso comum: o índice é o próprio disco nos fontes do projeto; aplica no lugar e inclui o que mudou.
+    if (repository.trackingInputs(root, [...unstaged, ...untracked]).length === 0) {
+      const report = await this.run('apply', root, configFile, false);
+      if (report.status !== 'valid') return this.blockCommit(report, blocking, log);
+      const toStage = repository.trackable(sources(report, root).map((file) => repository.relative(path.join(root, file))));
+      repository.stage(toStage);
+      if (toStage.length) log(`${toStage.length} arquivo(s) de tagueamento atualizados e incluídos neste commit.`);
+      return CLI_EXIT_CODES.valid;
+    }
+
+    // Índice diferente do disco (staging parcial, WIP não preparado ou arquivo novo fora do commit):
+    // o tagueamento é calculado sobre o conteúdo exato do commit e gravado só no índice.
+    const tagged = await repository.atIndex(root, async (project) => {
+      const report = await this.run('apply', project, path.join(project, path.relative(root, configFile)), false);
+      return { report, files: sources(report, project).map((file) => ({
+        file: repository.relative(path.join(root, file)), content: fs.readFileSync(path.join(project, file)) })) };
+    });
+    if (tagged.report.status !== 'valid') return this.blockCommit(tagged.report, blocking, log);
+    const staged = tagged.files.filter(({ file }) => repository.trackable([file]).length);
+    for (const { file, content } of staged) repository.stageContent(file, content);
+    if (staged.length) log(`${staged.length} arquivo(s) de tagueamento atualizados no conteúdo deste commit; suas alterações não preparadas foram preservadas.`);
+    // O disco acompanha (relatório, planilha e templates do trabalho local); nunca bloqueia o commit.
+    const local = await this.run('apply', root, configFile, false);
+    if (local.status !== 'valid') log('o trabalho local não preparado tem pendências de tagueamento; elas serão tratadas no commit dele.');
     return CLI_EXIT_CODES.valid;
+  }
+
+  private blockCommit(report: Report, blocking: (report: Report) => void, log: (message: string) => void): number {
+    blocking(report);
+    log('commit bloqueado: tagueamento incompleto (detalhes acima).');
+    return CLI_EXIT_CODES.incomplete;
+  }
+
+  /** Entrada do pre-push (refs enviadas); vazia quando o hook é executado à mão. */
+  private pushInput(): string {
+    if (process.stdin.isTTY) return '';
+    try { return fs.readFileSync(0, 'utf-8'); } catch { return ''; }
   }
 
   async main(): Promise<number> {

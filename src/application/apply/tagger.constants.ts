@@ -48,3 +48,24 @@ export const TECHNICAL_EVENT = /(blur|focus|input|keyup|keydown|keypress|paste|c
 export const CHANGE_CONTROL_TAGS: ReadonlySet<string> = new Set([
   'ion-select', 'select', 'ion-checkbox', 'ion-toggle', 'ion-radio-group', 'ion-segment', 'ion-range', 'ion-datetime',
 ]);
+
+/** Atributos/inputs cujo valor é o texto exibido do controle, em ordem de prioridade (exato: `headerTexto` descreve outro conteúdo). */
+export const LABEL_ATTRIBUTES = ['aria-label', 'label', 'title', 'texto', 'text', 'titulo', 'rotulo'] as const;
+/** Os mesmos atributos na forma ligada (`[attr.x]`/`[x]`). */
+export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMap((name) => [`[attr.${name}]`, `[${name}]`]);
+
+/** Nome que só repete o tipo do controle (`clickLink` → `link`) não descreve a ação. */
+export const GENERIC_ELEMENT_LABEL = /^(?:link|botao|button|item|card|elemento|opcao|option|acao|action)$/;
+
+/** Controles cujo conteúdo são as opções (o valor escolhido), nunca o nome do controle. */
+export const OPTION_CONTAINER_TAGS: ReadonlySet<string> = new Set(['select', 'ion-select', 'ion-radio-group', 'ion-segment']);
+
+/** Overlays declarados no template e o tipo enviado em `elemento` na `visualizacao` (o mesmo vocabulário do runtime). */
+export const INLINE_OVERLAY_KIND: Readonly<Record<string, string>> = {
+  'ion-modal': 'modal', 'ion-popover': 'popover', 'ion-alert': 'alerta', 'ion-action-sheet': 'menu-de-opcoes',
+};
+/** Palavras de estado/código no gatilho de um overlay inline (`isModalAjudaOpen` → `ajuda`). */
+export const OVERLAY_NAME_NOISE: ReadonlySet<string> = new Set([
+  'is', 'open', 'opened', 'aberto', 'aberta', 'abrir', 'exibir', 'mostrar', 'show', 'visible', 'visivel', 'modal', 'popover',
+  'alert', 'alerta', 'sheet', 'action', 'trigger', 'btn', 'button', 'botao', 'id', 'this',
+]);

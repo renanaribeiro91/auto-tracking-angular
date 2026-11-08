@@ -12,7 +12,7 @@ import { resolveProductionUsage } from './production-usage.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
-import { slug } from '../../domain/contract/slug.js';
+import { overlayComponentName, slug } from '../../domain/contract/slug.js';
 import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
@@ -202,6 +202,8 @@ export class TrackingPipeline {
           attrQuote: t.inline?.quote === '"' ? "'" : '"',
           lineOffset: t.inline?.line ?? 1,
           mode: config.mode,
+          ...(index.overlayComponents?.has(t.c.key) && !index.routedComponents.has(t.c.key) ? { overlay: {
+            elemento: index.overlayComponents.get(t.c.key)!, nome: overlayComponentName(t.c.def.selectors[0] ?? t.c.className) } } : {}),
         }) : { html: this.tagger.untagTemplate(html), entries: [], diagnostics: [] };
         // componente raiz (casca do app) aparece em todas as telas
         const resolved = screensOf(t.c);

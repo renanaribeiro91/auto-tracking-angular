@@ -14,7 +14,7 @@ export type Packed = [string, string, string, string | 0,
   [string, string, string, string, string | 0, string | 0] | 0,
   ([string, string, string, string, string] | [string, string, string, string, string, string])[] | 0,
   ([string, string, string, string, string] | [string, string, string, string, string, string])[] | 0,
-  (string[] | 0)?, (string[] | 0)?, (string | 0)?, 1?];
+  (string[] | 0)?, (string[] | 0)?, (string | 0)?, (0 | 1)?, [string, string, string]?];
 
 const nonBlank = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 512;
 const safeText = (value: unknown): value is string => typeof value === 'string' && value.length <= 2048;
@@ -32,7 +32,10 @@ export function pack(contract: TrackingElement): Packed {
     contract.overlayOutputs?.map(({ id, event, selector, label, output, elemento }) =>
       elemento !== undefined ? [id, event, selector, label, output, elemento] : [id, event, selector, label, output]) ?? 0,
     // Slots opcionais: tokens sem rótulos provados nem rótulo dinâmico mantêm o formato de 7 posições.
-    ...(contract.requireOrigin
+    ...(contract.view
+      ? [contract.rotulos?.length ? [...contract.rotulos] : 0, contract.rotuloDinamico?.length ? [...contract.rotuloDinamico] : 0,
+        contract.surfaceContract ?? 0, contract.requireOrigin ? 1 : 0, [contract.view.id, contract.view.elemento, contract.view.rotulo]]
+      : contract.requireOrigin
       ? [contract.rotulos?.length ? [...contract.rotulos] : 0, contract.rotuloDinamico?.length ? [...contract.rotuloDinamico] : 0, contract.surfaceContract ?? 0, 1]
       : contract.surfaceContract !== undefined
       ? [contract.rotulos?.length ? [...contract.rotulos] : 0, contract.rotuloDinamico?.length ? [...contract.rotuloDinamico] : 0, contract.surfaceContract]
@@ -41,11 +44,14 @@ export function pack(contract: TrackingElement): Packed {
 }
 
 export function unpack(value: unknown): TrackingElement | null {
-  if (!Array.isArray(value) || value.length < 7 || value.length > 11) return null;
-  const [owner, funcionalidade, tela, screenId, click, outputs, overlayOutputs, rawRotulos, rawDinamico, rawSurfaceContract, requireOrigin] = value;
+  if (!Array.isArray(value) || value.length < 7 || value.length > 12) return null;
+  const [owner, funcionalidade, tela, screenId, click, outputs, overlayOutputs, rawRotulos, rawDinamico, rawSurfaceContract, requireOrigin, rawView] = value;
   if (value.length === 11 && requireOrigin !== 1) return null;
-  const surfaceContract = value.length === 11 && rawSurfaceContract === 0 ? undefined : rawSurfaceContract;
-  if (value.length >= 10 && !(value.length === 11 && surfaceContract === undefined)
+  if (value.length === 12 && requireOrigin !== 0 && requireOrigin !== 1) return null;
+  const view = value.length === 12 ? rawView : undefined;
+  if (view !== undefined && (!Array.isArray(view) || view.length !== 3 || !view.every(nonBlank))) return null;
+  const surfaceContract = value.length >= 11 && rawSurfaceContract === 0 ? undefined : rawSurfaceContract;
+  if (value.length >= 10 && !(value.length >= 11 && surfaceContract === undefined)
     && (typeof surfaceContract !== 'string' || !surfaceContract.length || surfaceContract.length > MAX_PAYLOAD_SIZE)) return null;
   const dinamico = value.length >= 10 && rawDinamico === 0 ? undefined : rawDinamico;
   if (value.length >= 9 && dinamico !== undefined && (!Array.isArray(dinamico) || dinamico.length === 0 || dinamico.length > MAX_OUTPUTS
@@ -62,7 +68,7 @@ export function unpack(value: unknown): TrackingElement | null {
   if (outputs !== 0 && !gestures(outputs)) return null;
   if (overlayOutputs !== 0 && !gestures(overlayOutputs)) return null;
   // Lista explícita vazia vincula somente a origem de um portal, sem representar um evento.
-  if (screenId === 0 && click === 0 && outputs === 0 && (!overlayOutputs || overlayOutputs.length === 0)) return null;
+  if (screenId === 0 && click === 0 && outputs === 0 && (!overlayOutputs || overlayOutputs.length === 0) && !view) return null;
   const toBindings = (rows: ([string, string, string, string, string] | [string, string, string, string, string, string])[]) =>
     rows.map(([id, event, selector, label, output, elemento]) =>
       ({ id, event, selector, label, output, ...(elemento ? { elemento } : {}) }));
@@ -77,6 +83,7 @@ export function unpack(value: unknown): TrackingElement | null {
     ...(dinamico !== undefined ? { rotuloDinamico: dinamico as string[] } : {}),
     ...(surfaceContract !== undefined ? { surfaceContract } : {}),
     ...(requireOrigin === 1 ? { requireOrigin: true } : {}),
+    ...(view ? { view: { id: view[0], elemento: view[1], rotulo: view[2] } } : {}),
   };
 }
 

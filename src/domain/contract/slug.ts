@@ -15,3 +15,18 @@ export function slug(value: string | null | undefined, max = 60): string {
     .slice(0, max)
     .replace(/-+$/g, '');
 }
+
+/** Palavras técnicas do seletor de um componente apresentado como overlay (não o nomeiam). */
+const OVERLAY_TECHNICAL_WORDS = new Set(['modal', 'component', 'page', 'popover', 'dialog', 'alert', 'sheet', 'bottom', 'overlay']);
+
+/**
+ * Nome público do componente de overlay pelo seletor (CLI e runtime): sem o prefixo da biblioteca e sem palavras
+ * técnicas nas pontas (`app-erro-generico-modal` → `erro-generico`, `bsmo-modal-voucher` → `voucher`); vazio se nada sobra.
+ */
+export function overlayComponentName(selector: string): string {
+  const parts = slug(selector, 200).split('-');
+  const words = parts.length > 1 ? parts.slice(1) : parts;
+  while (words.length && OVERLAY_TECHNICAL_WORDS.has(words[0]!)) words.shift();
+  while (words.length && OVERLAY_TECHNICAL_WORDS.has(words[words.length - 1]!)) words.pop();
+  return words.join('-');
+}

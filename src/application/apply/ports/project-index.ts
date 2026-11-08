@@ -78,6 +78,8 @@ export interface ProjectIndex {
   readonly services: ReadonlyMap<string, ServiceInfo>;
   /** Alias de import TypeScript → identidade do módulo/action, para vincular effects sem colisões. */
   readonly actionImports?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Componente aberto por API de overlay (modal, dialog, popover, sheet) → tipo enviado em `elemento`. */
+  readonly overlayComponents?: ReadonlyMap<string, string>;
   /** chamadas provideAutoTracking(<config>.runtime) encontradas (prova de ligação no bootstrap) */
   readonly providerCalls: number;
 }

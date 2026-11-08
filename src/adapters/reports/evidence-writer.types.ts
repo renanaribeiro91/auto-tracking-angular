@@ -19,6 +19,7 @@ export interface EvidenceRow {
   readonly evento: string;
   readonly acao: string;
   readonly elemento: string;
+  readonly subfuncionalidade: string;
   readonly tela: string;
   readonly categoria: string;
   readonly rotulo: string;

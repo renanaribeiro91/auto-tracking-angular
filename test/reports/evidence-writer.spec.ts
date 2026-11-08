@@ -25,7 +25,7 @@ describe('planilha de evidência', () => {
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.readFile(file);
       const sheet = workbook.getWorksheet('Reembolso')!;
-      if (mutation === 'rotulo') sheet.getCell('H3').value = 'rótulo adulterado';
+      if (mutation === 'rotulo') sheet.getCell('I3').value = 'rótulo adulterado';
       if (mutation === 'cabecalho') sheet.getCell('A2').value = 'Outro campo';
       if (mutation === 'duplicacao') sheet.addRow(sheet.getRow(3).values);
       if (mutation === 'remocao') sheet.spliceRows(3, 1);
@@ -51,6 +51,21 @@ describe('planilha de evidência', () => {
     expect(workbook.getWorksheet('Resumo')?.getCell('B1').font.color?.argb).toBe('FF123456');
     expect(String(workbook.getWorksheet('Resumo')?.getCell('B5').value)).not.toMatch(/marca-especifica|cliente-real/i);
     await expect(writeEvidenceWorkbook(file, { ...input, branding: { primaryColor: 'invalida' } }, 'sig')).rejects.toThrow('#RRGGBB');
+  });
+  it('subfuncionalidade é a tela; tela igual à funcionalidade não se repete', async () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-sub-')), 'e.xlsx');
+    await writeEvidenceWorkbook(file, { owner: 'app', product: 'saude', branding: {},
+      entries: [entry({}), entry({ id: 'menu-voltar', funcionalidade: 'menu', tela: 'menu', telas: ['menu:menu'] })] }, 'sig');
+    const ExcelJS = await loadWorkbookProvider();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(file);
+    const row = (name: string) => {
+      const sheet = workbook.getWorksheet(name)!;
+      const labels = sheet.getRow(2).values as (string | undefined)[];
+      return Object.fromEntries(labels.flatMap((label, index) => (label ? [[label, sheet.getRow(3).getCell(index).value]] : [])));
+    };
+    expect(row('Reembolso')).toMatchObject({ Subfuncionalidade: 'tipo', Tela: '{ambiente}:saude:reembolso:tipo' });
+    expect(row('Menu')).toMatchObject({ Subfuncionalidade: 'menu', Tela: '{ambiente}:saude:menu', Categoria: '{ambiente}:saude:menu' });
   });
   it('mostra o rótulo exatamente como enviado e identifica a opção dinâmica', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-dynamic-')), 'e.xlsx');

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, spawnSync } from 'child_process';
-import { hookBlock, upsertHookBlock } from '../../src/cli/git-hooks.js';
+import { hookBlock, pushedCommits, upsertHookBlock } from '../../src/cli/git-hooks.js';
 
 describe('hooks git: bloco gerenciado pela lib', () => {
   it('cria hook novo e é idempotente', () => {
@@ -36,6 +36,12 @@ describe('hooks git: bloco gerenciado pela lib', () => {
     expect(result).not.toContain('\r');
   });
 
+  it('pre-push lê só os commits locais enviados; ref removida não é verificada', () => {
+    const sha = 'a'.repeat(40);
+    expect(pushedCommits(`refs/heads/x ${sha} refs/heads/x ${'b'.repeat(40)}\nrefs/heads/y ${'0'.repeat(40)} refs/heads/y ${sha}\n`)).toEqual([sha]);
+    expect(pushedCommits('')).toEqual([]);
+  });
+
   it('monorepo: o bloco aponta para a pasta do app dentro do repositório', () => {
     expect(hookBlock('pre-commit', path.join('apps', 'saude'))).toContain('auto_tracking_projeto="$(git rev-parse --show-toplevel)/apps/saude"');
   });
@@ -52,6 +58,7 @@ describe('hooks git: fluxo real de commit e push', () => {
     fs.writeFileSync(target, content);
   };
   const cli = (...args: string[]) => spawnSync(process.execPath, [path.resolve('dist/cli/index.js'), ...args, '--root', root], { encoding: 'utf8' });
+  const prePush = (input = '') => spawnSync(process.execPath, [path.resolve('dist/cli/index.js'), 'hook', 'pre-push', '--root', root], { encoding: 'utf8', input });
 
   beforeEach(() => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tracking-hooks-')));
@@ -104,7 +111,7 @@ describe('hooks git: fluxo real de commit e push', () => {
     const status = cli('hooks', 'status');
     expect(status.status).toBe(0);
     expect(status.stdout).toMatch(/pre-commit\s+instalado\s+\.githooks\/pre-commit/);
-    expect(status.stdout).toContain('inclui no próprio commit');
+    expect(status.stdout).toContain('inclui no commit as fontes alteradas');
     expect(fs.readFileSync(path.join(root, '.gitattributes'), 'utf8').match(/eol=lf/g)).toHaveLength(1);
 
     // Commit inicial: a lib marca a tela e o botão e inclui tudo no mesmo commit.
@@ -133,16 +140,16 @@ describe('hooks git: fluxo real de commit e push', () => {
     expect(second.status).toBe(0);
     expect(git('show', '--name-only', '--format=', 'HEAD').trim()).toBe('README.md');
 
-    // Edição não preparada num template: bloquear ANTES de gravar qualquer marcação.
+    // Edição não preparada num template não bloqueia commit de outro arquivo nem entra nele.
     write('src/app.html', `${git('show', 'HEAD:src/app.html')}<button (click)="cancelar()">Cancelar</button>`);
-    const untouched = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
     write('NOTAS.md', 'x');
     git('add', 'NOTAS.md');
-    const blocked = commit('chore: notas');
-    expect(blocked.status).not.toBe(0);
-    expect(blocked.stderr).toContain('alterações não preparadas: src/app.html');
-    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(untouched);
-    expect(git('diff', '--cached', '--name-only').trim()).toBe('NOTAS.md');
+    const unrelated = commit('chore: notas');
+    expect(unrelated.status).toBe(0);
+    expect(git('show', '--name-only', '--format=', 'HEAD').trim()).toBe('NOTAS.md');
+    expect(git('show', 'HEAD:src/app.html')).not.toContain('Cancelar');
+    // O disco acompanha: o trabalho local já fica tagueado para o próximo commit.
+    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toMatch(/data-at-ref="[^"]+"[^>]*\(click\)="cancelar\(\)"|\(click\)="cancelar\(\)"[^>]*data-at-ref=/);
 
     // Revisado e preparado: o commit passa com a marcação nova.
     git('add', '-A');
@@ -156,51 +163,60 @@ describe('hooks git: fluxo real de commit e push', () => {
     fs.rmSync(path.join(root, '.auto-tracking'), { recursive: true, force: true });
     expect(cli('hook', 'pre-push').status).toBe(0);
 
-    // Uma mudança local em template já tagueado, mesmo sem novos tokens, bloqueia o push.
-    fs.appendFileSync(path.join(root, 'src/app.html'), '<p>Texto local</p>');
-    const push = cli('hook', 'pre-push');
-    expect(push.status).toBe(1);
-    expect(push.stderr).toContain('fonte não commitada: src/app.html');
-    expect(push.stderr).toContain('push bloqueado');
+    // Arquivos locais (staged, não preparados ou novos) não são enviados: nunca bloqueiam o push.
+    fs.appendFileSync(path.join(root, 'src/app.html'), '<button (click)="local()">Local</button>');
+    expect(prePush().status).toBe(0);
     git('add', 'src/app.html');
-    expect(cli('hook', 'pre-push').stderr).toContain('fonte não commitada: src/app.html');
     write('src/extra.html', '<button (click)="extra()">Extra</button>');
-    expect(cli('hook', 'pre-push').stderr).toContain('fonte não commitada: src/extra.html');
+    const dirty = prePush(`refs/heads/main ${git('rev-parse', 'HEAD').trim()} refs/heads/main ${'0'.repeat(40)}\n`);
+    expect(dirty.stderr).toBe('');
+    expect(dirty.status).toBe(0);
+
+    // Commit enviado sem tagueamento (hook pulado) bloqueia, mesmo com o disco local diferente.
+    git('reset', '-q', '--hard');
+    fs.rmSync(path.join(root, 'src/extra.html'));
+    write('src/app.html', `${git('show', 'HEAD:src/app.html')}<button (click)="pular()">Pular</button>`);
+    git('add', 'src/app.html');
+    expect(spawnSync('git', ['commit', '--no-verify', '-m', 'feat: sem hook'], { cwd: root }).status).toBe(0);
+    write('NOTAS.md', 'staged qualquer');
+    git('add', 'NOTAS.md');
+    const push = prePush();
+    expect(push.status).toBe(1);
+    expect(push.stderr).toContain('sem o tagueamento atualizado');
+    expect(push.stderr).toContain('push bloqueado');
+    expect(git('worktree', 'list').trim().split('\n')).toHaveLength(1); // cópia temporária removida
   });
 
-  it('protege edição parcialmente preparada sem modificar índice, working tree ou cache', () => {
+  it('staging parcial: tagueia o conteúdo exato do commit e preserva o trabalho não preparado', () => {
     expect(cli('hooks', 'install').status).toBe(0);
     git('add', '-A');
     expect(commit('feat: inicial').status).toBe(0);
     write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button>');
     git('add', 'src/app.html');
     fs.appendFileSync(path.join(root, 'src/app.html'), '<button (click)="outro()">Outro</button>');
-    const before = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
-    const stagedBefore = git('show', ':src/app.html');
-    const cacheBefore = fs.readFileSync(path.join(root, '.auto-tracking/cache/estado.json'));
-    const blocked = commit('feat: preparado parcialmente');
-    expect(blocked.status).toBe(1);
-    expect(blocked.stderr).toContain('alterações parcialmente preparadas: src/app.html');
-    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(before);
-    expect(git('show', ':src/app.html')).toBe(stagedBefore);
-    expect(fs.readFileSync(path.join(root, '.auto-tracking/cache/estado.json')).equals(cacheBefore)).toBe(true);
+    const partial = commit('feat: preparado parcialmente');
+    expect(partial.status).toBe(0);
+    const committed = git('show', 'HEAD:src/app.html');
+    expect(committed).toContain('data-at-ref=');
+    expect(committed).toContain('Salvar');
+    expect(committed).not.toContain('Outro');
+    // O trabalho não preparado continua só no disco, também tagueado.
+    expect(git('diff', '--name-only').trim()).toBe('src/app.html');
+    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toContain('Outro');
+    expect(git('diff', '--cached', '--name-only').trim()).toBe('');
+    expect(prePush().status).toBe(0);
   });
 
-  it('rejeita índice não tagueado quando o arquivo local já está tagueado', () => {
+  it('índice sem tagueamento é tagueado mesmo quando o arquivo local já está', () => {
     expect(cli('hooks', 'install').status).toBe(0);
     git('add', '-A');
     expect(commit('feat: inicial').status).toBe(0);
     write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button>');
     git('add', 'src/app.html');
-    const staged = git('show', ':src/app.html');
     expect(cli('apply', '--json').status).toBe(0);
-    const working = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
-    expect(working).toContain('data-at-ref=');
-    expect(staged).not.toContain('data-at-ref=');
-    const blocked = commit('feat: conteúdo diferente no índice');
-    expect(blocked.status).toBe(1);
-    expect(blocked.stderr).toContain('alterações parcialmente preparadas: src/app.html');
-    expect(git('show', ':src/app.html')).toBe(staged);
-    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(working);
+    expect(git('show', ':src/app.html')).not.toContain('data-at-ref=');
+    expect(commit('feat: conteúdo diferente no índice').status).toBe(0);
+    expect(git('show', 'HEAD:src/app.html')).toContain('data-at-ref=');
+    expect(git('status', '--porcelain')).toBe('');
   });
 });

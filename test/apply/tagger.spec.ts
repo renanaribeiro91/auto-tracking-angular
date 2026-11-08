@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { TemplateTagger, tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
 import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
 import type { ComponentCatalog, ComponentDef } from '../../src/application/apply/ports/component-catalog.js';
@@ -136,6 +139,32 @@ describe('tagger: toda interação declarada no template', () => {
       expect(external.html).toMatch(/data-at-rotulo-dinamico="[^"|]+"/);
       expect(external.entries[0]!.rotulos).toBeUndefined();
     });
+  });
+
+  it('input de texto do componente é o rótulo; lista importada de outro arquivo prova os valores', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-lista-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'itens.data.ts'), `export const itens: Item[] = [{ id: 1, texto: 'Alterar Senha' }, { id: 2, texto: 'Termos de uso' }];`);
+      const classText = `class ListaPage { configuracoes: Item[]; ngOnInit() { this.configuracoes = itens; } }`;
+      fs.writeFileSync(path.join(dir, 'lista.page.ts'), `import { itens } from './itens.data';\n${classText}`);
+      const listLabels = staticListLabels({ classText, tsFile: path.join(dir, 'lista.page.ts') } as ComponentInfo);
+      const item = def({ selectors: ['x-lista-link-item'], outputs: new Map([['clickEvent', 'clickEvent']]),
+        template: '<a (click)="clickEvent.emit()">{{ texto }}</a>', inputs: new Set(['texto']) });
+      const html = `<ng-container *ngFor="let configuracao of configuracoes; let i = index">
+        <x-lista-link-item (clickEvent)="clickLink(configuracao)" [attr.data-testid]="'item-configuracoes-lista-' + i" [texto]="configuracao.texto"></x-lista-link-item>
+      </ng-container>`;
+      const r = tagTemplate(html, ctx({ listLabels, mode: 'ref', catalog: { get: (tag) => (tag === 'x-lista-link-item' ? item : catalog.get(tag)) } }));
+      expect(r.entries[0]).toMatchObject({ elemento: 'link', rotulos: ['alterar-senha', 'termos-de-uso'] });
+      // Fallback nunca é o nome do tipo do elemento.
+      expect(r.entries[0]!.rotulo).not.toBe('link');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    expect(tagTemplate('<x-card texto="Ver detalhes" (click)="abrir()"></x-card>', ctx()).entries[0]!.rotulo).toBe('ver-detalhes');
+    expect(tagTemplate('<a (click)="clickLink()" data-testid="ajuda-contato"></a>', ctx()).entries[0]!.rotulo).toBe('ajuda-contato');
+    // Opções de um segment/select são o valor escolhido, nunca o rótulo do controle.
+    const segment = tagTemplate('<ion-segment (ionChange)="selecionarAba($event)" value="lista"><ion-segment-button value="lista"><ion-label>Lista</ion-label></ion-segment-button><ion-segment-button value="mapa"><ion-label>Mapa</ion-label></ion-segment-button></ion-segment>', ctx());
+    expect(segment.entries[0]).toMatchObject({ rotulo: 'selecionar-aba', opcao_selecionada_1: '[valor-selecionado]' });
+    // Checkbox/toggle: o texto interno é o próprio rótulo do controle.
+    expect(tagTemplate('<ion-checkbox (ionChange)="aceitar($event)">Aceito os termos</ion-checkbox>', ctx()).entries[0]!.rotulo).toBe('aceito-os-termos');
   });
 
   it('item de pessoa física: envia o descritor público provado pelo tipo, nunca o nome da pessoa', () => {

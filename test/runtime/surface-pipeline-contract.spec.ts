@@ -8,6 +8,7 @@ import { AutoTrackingSurfaces, installDomTracker } from '../../src/adapters/runt
 import { createTrackingSurface } from '../../src/adapters/runtime/create-tracking-surface.js';
 import { examplePreset } from '../fixtures/preset/index.js';
 import type { TrackingEvent } from '../../src/config.js';
+import { screenPath } from '../../src/domain/contract/screen-binding.js';
 
 it('pareia a superfície TS gerada com o evento real do DOM e reconcilia mudança sem duplicar o gesto', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-source-runtime-'));
@@ -63,7 +64,7 @@ it('pareia a superfície TS gerada com o evento real do DOM e reconcilia mudanç
       expect(entry.telas).toEqual([`${screen.funcionalidade}:${screen.tela}`]);
       expect(events[index]).toMatchObject({ name: entry.evento, params: {
         rotulo: entry.rotulo, elemento: entry.elemento, funcionalidade: screen.funcionalidade,
-        tela: `app-x:produto:${screen.funcionalidade}:${screen.tela}`, categoria: `app-x:produto:${screen.funcionalidade}:${screen.tela}`,
+        tela: `app-x:produto:${screenPath(screen.funcionalidade, screen.tela)}`, categoria: `app-x:produto:${screenPath(screen.funcionalidade, screen.tela)}`,
       } });
     }
     expect(events).toHaveLength(2);

@@ -2,6 +2,7 @@
 // consumidor só chama o CLI. Funciona com .git/hooks, core.hooksPath e Husky.
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export type GitHookName = 'pre-commit' | 'pre-push';
@@ -15,6 +16,8 @@ const HOOK_DESCRIPTION: Readonly<Record<GitHookName, string>> = {
   'pre-commit': 'Atualiza o tagueamento e inclui no próprio commit o que mudou.',
   'pre-push': 'Só verifica: bloqueia o push se o tagueamento estiver pendente ou fora do commit.',
 };
+/** SHA nulo do protocolo do pre-push: ref removida, nada a verificar. */
+const DELETED_REF = /^0+$/;
 
 /**
  * Conferência de versão embutida no próprio hook (não depende da lib instalada, que pode ser a antiga):
@@ -102,9 +105,15 @@ export function upsertHookBlock(existing: string | null, hook: GitHookName, proj
 
 /** O que cada hook faz, exibido por `auto-tracking hooks status`. */
 export const GIT_HOOK_PURPOSE: Readonly<Record<GitHookName, string>> = {
-  'pre-commit': 'atualiza o tagueamento e inclui no próprio commit apenas as fontes alteradas; evidências e cache ficam locais',
-  'pre-push': 'verifica os templates sem depender de cache e bloqueia fontes locais ainda não commitadas',
+  'pre-commit': 'atualiza o tagueamento do projeto inteiro e inclui no commit as fontes alteradas; evidências e cache ficam locais',
+  'pre-push': 'verifica o tagueamento exatamente dos commits enviados; alterações locais fora deles não bloqueiam',
 };
+
+/** Commits locais enviados, lidos da entrada padrão do pre-push (`<ref> <sha> <ref remota> <sha remoto>`). */
+export function pushedCommits(input: string): string[] {
+  return [...new Set(input.split('\n').map((line) => line.trim().split(/\s+/)[1] ?? '')
+    .filter((sha) => /^[0-9a-f]{7,64}$/i.test(sha) && !DELETED_REF.test(sha)))];
+}
 
 export type HookState = 'instalado' | 'desatualizado' | 'ausente';
 
@@ -130,21 +139,66 @@ export class GitRepository {
     return new Set(this.git(['diff', '--name-only', '-z']).split('\0').filter(Boolean));
   }
 
-  /** Um commit parcial pode levar um template diferente daquele analisado no disco. */
-  partiallyStagedTrackingInputs(unstaged: ReadonlySet<string>): string[] {
-    return this.git(['diff', '--cached', '--name-only', '-z']).split('\0').filter((file) =>
-      unstaged.has(file) && TRACKING_INPUT_PATTERN.test(file),
-    );
-  }
-
   untrackedFiles(): Set<string> {
     return new Set(this.git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean));
   }
 
-  /** Fontes e configurações que podem alterar a derivação do tagueamento. */
-  uncommittedTrackingInputs(): string[] {
+  /** Fontes e configurações do projeto cujo conteúdo no disco difere do commit atual. */
+  uncommittedTrackingInputs(projectRoot: string): string[] {
     const tracked = this.git(['diff', '--no-renames', '--name-only', '-z', 'HEAD']).split('\0');
-    return [...new Set([...tracked, ...this.untrackedFiles()])].filter((file) => TRACKING_INPUT_PATTERN.test(file));
+    return this.trackingInputs(projectRoot, [...tracked, ...this.untrackedFiles()]);
+  }
+
+  /** Arquivos que entram na derivação do tagueamento do projeto (fontes, templates e configurações). */
+  trackingInputs(projectRoot: string, files: Iterable<string>): string[] {
+    const project = this.relative(projectRoot);
+    return [...new Set(files)].filter((file) => TRACKING_INPUT_PATTERN.test(file) && (!project || file.startsWith(`${project}/`)));
+  }
+
+  head(): string {
+    return this.git(['rev-parse', 'HEAD']).trim();
+  }
+
+  /**
+   * Executa `run` sobre uma cópia limpa do commit (worktree temporário): o disco local,
+   * com arquivos staged ou não, nunca entra na verificação do que é enviado.
+   */
+  async atCommit<T>(sha: string, projectRoot: string, run: (projectRoot: string) => Promise<T>): Promise<T> {
+    return this.inCopy(projectRoot, (checkout) => this.git(['worktree', 'add', '--detach', '--quiet', checkout, sha]), run, (checkout) => {
+      try { this.git(['worktree', 'remove', '--force', checkout]); } catch { /* a pasta é removida em seguida; prune limpa o registro */ }
+      try { this.git(['worktree', 'prune']); } catch { /* registro órfão não afeta o push */ }
+    });
+  }
+
+  /** Executa `run` sobre uma cópia exata do índice: o conteúdo que o commit vai gravar. */
+  async atIndex<T>(projectRoot: string, run: (projectRoot: string) => Promise<T>): Promise<T> {
+    return this.inCopy(projectRoot, (checkout) => this.git(['checkout-index', '--all', '--force', `--prefix=${checkout.split(path.sep).join('/')}/`]), run);
+  }
+
+  /** Grava `content` no índice para `file`, mantendo o modo; o working tree não é tocado. */
+  stageContent(file: string, content: Buffer): void {
+    const sha = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: this.root, input: content, encoding: 'utf-8' }).trim();
+    const mode = /^(\d{6})\s/.exec(this.git(['ls-files', '--stage', '--', file]))?.[1] ?? '100644';
+    this.git(['update-index', '--add', '--cacheinfo', `${mode},${sha},${file}`]);
+  }
+
+  /** Cópia temporária do repositório com as dependências instaladas do projeto (por link). */
+  private async inCopy<T>(projectRoot: string, fill: (checkout: string) => void, run: (projectRoot: string) => Promise<T>,
+    release: (checkout: string) => void = () => {}): Promise<T> {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-tracking-'));
+    const checkout = path.join(directory, 'copia');
+    try {
+      fill(checkout);
+      for (const base of new Set([this.root, projectRoot])) {
+        const modules = path.join(base, 'node_modules');
+        const link = path.join(checkout, path.relative(this.root, base), 'node_modules');
+        if (fs.existsSync(modules) && !fs.existsSync(link)) fs.symlinkSync(modules, link, 'junction');
+      }
+      return await run(path.join(checkout, path.relative(this.root, projectRoot)));
+    } finally {
+      release(checkout);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   }
 
   /** Caminho relativo à raiz git, no formato que o próprio git reporta. */

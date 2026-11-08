@@ -13,6 +13,10 @@ export const EXAMPLE_TRACKING_SCHEMA: TrackingSchema = {
     requiredParams: ['ambiente', 'produto', 'funcionalidade', 'tela'],
     allowedParams: ['ambiente', 'produto', 'funcionalidade', 'subfuncionalidade', 'tela'],
   },
+  visualizacao: {
+    requiredParams: ['ambiente', 'produto', 'funcionalidade', 'tela', 'categoria', 'elemento', 'rotulo', 'acao'],
+    allowedParams: ['ambiente', 'produto', 'funcionalidade', 'subfuncionalidade', 'tela', 'categoria', 'elemento', 'rotulo', 'acao'],
+  },
 };
 
 /** IDs de bundle (busca exata) → ambiente, do consumidor de exemplo. */
