@@ -30,6 +30,7 @@ interface Report {
   readonly written?: readonly string[];
   readonly dryRun?: boolean;
   readonly pendencias?: readonly string[];
+  readonly avisos?: readonly string[];
   readonly diagnosticos?: readonly { code: string; arquivo: string; linha: number; mensagem: string }[];
 }
 
@@ -41,6 +42,7 @@ class CliReportFormatter {
       Object.assign(output, { arquivosEscritos: report.written?.length ?? 0, dryRun: report.dryRun ?? false });
     }
     if (report.pendencias) output['pendencias'] = report.pendencias;
+    if (report.avisos?.length) output['avisos'] = report.avisos;
     if (report.diagnosticos?.length) output['diagnosticos'] = report.diagnosticos;
     if (report.cache) output['cache'] = 'hit';
     return output;
@@ -102,6 +104,7 @@ class CliReportFormatter {
   private appendIssues(lines: string[], report: Report, paint: (code: string, text: string) => string): void {
     const issues = [
       ...(report.pendencias ?? []),
+      ...(report.avisos ?? []),
       ...(report.diagnosticos ?? []).map((diagnostic) => `${diagnostic.code}  ${diagnostic.arquivo}:${diagnostic.linha}  ${diagnostic.mensagem}`),
     ];
     if (issues.length === 0) return;
@@ -301,8 +304,9 @@ class AutoTrackingCli {
     workbookChanged: boolean,
   ): Report {
     const pending = result.changes.map((change) => `marcação pendente: ${path.relative(root, change.file)}`);
-    if (reportChanged) pending.push(`relatório ausente ou divergente: ${path.relative(root, paths.relatorioFile)}`);
-    if (workbookChanged) pending.push(`planilha ausente ou divergente: ${path.relative(root, paths.excelFile)}`);
+    // Evidências são locais e não vão para o Git: trocar de branch as desatualiza sem que o código esteja errado.
+    const stale = [...(reportChanged ? [paths.relatorioFile] : []), ...(workbookChanged ? [paths.excelFile] : [])]
+      .map((file) => `evidência local desatualizada: ${path.relative(root, file)} (atualize com npm run tracking)`);
     return {
       command: 'verify',
       status: pending.length === 0 ? status : 'incomplete',
@@ -310,6 +314,7 @@ class AutoTrackingCli {
       cache: false,
       planilha: path.relative(root, paths.excelFile),
       pendencias: pending,
+      avisos: stale,
       diagnosticos: result.diagnostics,
     };
   }

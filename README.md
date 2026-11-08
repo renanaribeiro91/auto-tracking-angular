@@ -134,9 +134,9 @@ npm run tracking -- --dry-run    # visualiza mudanças sem gravar
 npm run tracking -- --json       # saída estruturada para automação
 ```
 
-Códigos de saída: `0` válido, `1` pendências estruturais ou marcações/evidências desatualizadas, `2` erro operacional/configuração. A mensagem de execução sem mudanças indica que marcações e evidências estão consistentes; não significa que eventos fora do escopo estejam cobertos.
+Códigos de saída: `0` válido, `1` pendências estruturais ou marcações desatualizadas, `2` erro operacional/configuração. A mensagem de execução sem mudanças indica que marcações e evidências estão consistentes; não significa que eventos fora do escopo estejam cobertos.
 
-`verify` compara as fontes atuais, o JSON determinístico e o conteúdo das células da planilha: ausência, linha duplicada, interação removida ou valor divergente impede aprovação. `tracking` recompõe os artefatos divergentes e preserva os IDs existentes. O hook `pre-push` mantém a verificação das fontes commitadas, pois as evidências são locais e não são transportadas pelo Git.
+`verify` reprova apenas fontes sem o tagueamento atual. Relatório ou planilha local ausente ou divergente, como após trocar de branch, gera um aviso sem reprovar, pois as evidências não vão para o Git. `tracking` recompõe os artefatos divergentes e preserva os IDs existentes. O hook `pre-push` mantém a verificação das fontes commitadas, pois as evidências são locais e não são transportadas pelo Git.
 
 ## Artefatos gerados
 

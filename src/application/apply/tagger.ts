@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { labelSlug, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -301,7 +301,7 @@ export class TemplateTagger {
       const statement = source.statements[0];
       const alternatives = (node: ts.Expression): string[] | null => {
         if (ts.isParenthesizedExpression(node)) return alternatives(node.expression);
-        if (ts.isStringLiteralLike(node)) return [labelSlug(node.text)];
+        if (ts.isStringLiteralLike(node)) return looksLikeIdentifier(node.text) ? null : [labelSlug(node.text)];
         if (!ts.isConditionalExpression(node)) return null;
         const yes = alternatives(node.whenTrue), no = alternatives(node.whenFalse);
         return yes && no && yes.length + no.length <= 64 ? [...yes, ...no] : null;
@@ -359,7 +359,10 @@ export class TemplateTagger {
       const bound = attrs.get(`[attr.${name}]`) ?? attrs.get(`[${name}]`);
       return bound === undefined ? undefined : this.stringLiteral(bound);
     };
-    return LABEL_ATTRIBUTES.flatMap((name) => [literal(name), attrs.get(name)])
+    const singleGesture = [...attrs.keys()].filter((name) => name.startsWith('(') && !TECHNICAL_EVENT.test(name)).length === 1;
+    const compound = !singleGesture ? [] : [...attrs].filter(([name]) => COMPOUND_LABEL_INPUT.test(name.replace(/^\[|\]$/g, '')))
+      .map(([name, value]) => (name.startsWith('[') ? this.stringLiteral(value) : value));
+    return [...LABEL_ATTRIBUTES.flatMap((name) => [literal(name), attrs.get(name)]), ...compound]
       .filter((value): value is string => !!value?.trim());
   }
 
@@ -576,6 +579,25 @@ export class TemplateTagger {
       const prior = ctx.mode === 'ref' && priorRef ? decodeTrackingToken(priorRef) : null;
       if (priorRef && !prior) {
         diagnostics.push({ code: 'TRACKING_REFERENCE_UNKNOWN', arquivo: ctx.relFile, linha: this.lineOf(html, m.index!), mensagem: `data-at-ref ilegível para a lib instalada (outra versão ou edição manual): execute npm install e repita` });
+        continue;
+      }
+      const provenOutputs = prior?.outputs ?? decodeOutputBindings(originalAttrs.get('data-at-outputs'));
+      if (provenOutputs.length && this.isCustomElement(tag) && !isInputField(tag) && !ctx.catalog.get(tag)) {
+        // Sem a definição não há prova nova nem contrária (instalação incompleta): retirar apagaria eventos já comprovados.
+        const linha = this.lineOf(html, m.index!) + (ctx.lineOffset ?? 1) - 1;
+        const funcionalidade = prior?.funcionalidade ?? originalAttrs.get('data-at-funcionalidade') ?? ctx.funcionalidade;
+        const tela = prior?.tela ?? originalAttrs.get('data-at-tela') ?? ctx.tela;
+        diagnostics.push({ code: 'COMPONENT_DEFINITION_MISSING', arquivo: ctx.relFile, linha,
+          mensagem: `<${tag}> não foi encontrado nas dependências instaladas; marcação preservada. Confira a instalação (npm ci)` });
+        const screenId = prior?.screenId ?? originalAttrs.get('data-at-screen');
+        if (screenId) {
+          screenPlaced = true;
+          entries.push(this.createEntry({ id: this.claimId(screenId, screenId, ctx, claimed), evento: 'screen_view', acao: 'visualizacao', elemento: '', rotulo: '', origem: 'rota', linha, ...(priorRef ? { ref: priorRef } : {}) }, ctx, funcionalidade, tela));
+        }
+        for (const output of provenOutputs) {
+          entries.push(this.createEntry({ id: this.claimId(output.id, output.id, ctx, claimed), evento: 'click', acao: 'clique', elemento: output.elemento ?? this.elementoFor(tag, originalAttrs, output.output),
+            rotulo: output.label, ...(prior?.rotulos?.length ? { rotulos: prior.rotulos } : {}), origem: `(${output.output}) em <${tag}>`, linha, ...(priorRef ? { ref: priorRef } : {}) }, ctx, funcionalidade, tela));
+        }
         continue;
       }
       // Reconstituir atributos semânticos apenas em memória; o HTML permanece compacto.

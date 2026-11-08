@@ -41,8 +41,8 @@ describe('CLI: cache conserva prova e status', () => {
     const editedReport = JSON.parse(originalReport);
     editedReport.entries[0].id = 'id-adulterado';
     fs.writeFileSync(reportFile, JSON.stringify(editedReport));
-    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
-      pendencias: expect.arrayContaining([expect.stringContaining('relatório ausente ou divergente')]) });
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0,
+      avisos: [expect.stringContaining('evidência local desatualizada: .auto-tracking/relatorio.json')] });
     expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
     expect(fs.readFileSync(reportFile, 'utf8')).toBe(originalReport);
     const ExcelJS = await loadWorkbookProvider();
@@ -55,8 +55,8 @@ describe('CLI: cache conserva prova e status', () => {
     await workbook.xlsx.writeFile(workbookFile);
     const stateFile = path.join(root, '.auto-tracking/cache/estado.json');
     const stateBefore = fs.readFileSync(stateFile, 'utf8');
-    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
-      pendencias: expect.arrayContaining([expect.stringContaining('planilha ausente ou divergente')]) });
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0,
+      avisos: [expect.stringContaining('evidência local desatualizada: .auto-tracking/evidencia-tagueamento.xlsx')] });
     expect(fs.readFileSync(stateFile, 'utf8')).toBe(stateBefore);
     expect(cli()).toMatchObject({ status: 'valid', exit: 0 });
     await workbook.xlsx.readFile(workbookFile);
@@ -269,8 +269,8 @@ describe('CLI: cache conserva prova e status', () => {
     const report = fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8');
     const template = fs.readFileSync(path.join(root, 'src/app.html'), 'utf8');
     fs.rmSync(output, { recursive: true, force: true });
-    expect(cli('verify')).toMatchObject({ status: 'incomplete', exit: 1,
-      pendencias: expect.arrayContaining([expect.stringContaining('relatório ausente'), expect.stringContaining('planilha ausente')]) });
+    expect(cli('verify')).toMatchObject({ status: 'valid', exit: 0,
+      avisos: [expect.stringContaining('relatorio.json'), expect.stringContaining('evidencia-tagueamento.xlsx')] });
     expect(cli()).toMatchObject({ status: 'valid', arquivosEscritos: 3 });
     expect(fs.readFileSync(path.join(output, 'relatorio.json'), 'utf8')).toBe(report);
     expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).toBe(template);

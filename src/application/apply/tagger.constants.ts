@@ -51,6 +51,8 @@ export const CHANGE_CONTROL_TAGS: ReadonlySet<string> = new Set([
 
 /** Atributos/inputs cujo valor é o texto exibido do controle, em ordem de prioridade (exato: `headerTexto` descreve outro conteúdo). */
 export const LABEL_ATTRIBUTES = ['aria-label', 'label', 'title', 'texto', 'text', 'titulo', 'rotulo'] as const;
+/** Input composto que nomeia o controle (`tabTitle`, `buttonLabel`); só vale com gesto único; cabeçalho, subtítulo e botões internos (`okText`) descrevem outro conteúdo. */
+export const COMPOUND_LABEL_INPUT = /^(?!header|cabecalho|sub|ok|cancel|confirm|done|close|clear|err|help|ajuda)[a-z]\w*(?:Title|Titulo|Label|Text|Texto)$/;
 /** Os mesmos atributos na forma ligada (`[attr.x]`/`[x]`). */
 export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMap((name) => [`[attr.${name}]`, `[${name}]`]);
 

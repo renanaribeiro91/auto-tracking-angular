@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { TemplateTagger, tagTemplate, type TagContext } from '../../src/application/apply/tagger.js';
 import { decodeTrackingToken } from '../../src/domain/contract/tracking-token.js';
+import { encodeTrackingToken } from '../../src/domain/contract/tracking-token-encoder.js';
 import type { ComponentCatalog, ComponentDef } from '../../src/application/apply/ports/component-catalog.js';
 import { listItemFields as listItemFields_, staticListLabels } from '../../src/application/apply/selection-provenance.js';
 import type { ComponentInfo } from '../../src/application/apply/ports/project-index.js';
@@ -141,6 +142,16 @@ describe('tagger: toda interação declarada no template', () => {
     });
   });
 
+  it('componente tagueado ausente das dependências instaladas mantém a marcação e avisa', () => {
+    const ref = encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'home', tela: 'home',
+      outputs: [{ id: 'home-inicio', event: 'click', selector: 'ion-tab-button', label: 'inicio', output: 'onClick', elemento: 'filtro' }] });
+    const html = `<x-tab-bar data-at-ref="${ref}" (onClick)="ir()"></x-tab-bar>`;
+    const result = tagTemplate(html, ctx({ mode: 'ref' }));
+    expect(result.html).toBe(html);
+    expect(result.entries).toEqual([expect.objectContaining({ id: 'home-inicio', evento: 'click', elemento: 'filtro', rotulo: 'inicio', ref })]);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(['COMPONENT_DEFINITION_MISSING']);
+  });
+
   it('input de texto do componente é o rótulo; lista importada de outro arquivo prova os valores', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-lista-'));
     try {
@@ -159,6 +170,13 @@ describe('tagger: toda interação declarada no template', () => {
       expect(r.entries[0]!.rotulo).not.toBe('link');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     expect(tagTemplate('<x-card texto="Ver detalhes" (click)="abrir()"></x-card>', ctx()).entries[0]!.rotulo).toBe('ver-detalhes');
+    // Input composto do próprio controle é o rótulo; id de teste no aria-label nunca é, e o título do header não descreve o gesto.
+    const tab = tagTemplate(`<x-tab tabTitle="Atendimento" [attr.aria-label]="'tab-home-atendimento'" (click)="mudarTituloAtendimento()"></x-tab>`, ctx()).entries[0]!;
+    expect(tab.rotulo).toBe('atendimento');
+    expect(tab.rotulos).toBeUndefined();
+    expect(tagTemplate('<x-barra headerTexto="Ajustes" (click)="salvarDados()"></x-barra>', ctx()).entries[0]!.rotulo).toBe('salvar-dados');
+    expect(tagTemplate('<x-opcao labelPlacement="start" (click)="alternarAcesso()"></x-opcao>', ctx()).entries[0]!.rotulo).toBe('alternar-acesso');
+    expect(tagTemplate(`<x-opcao [okText]="'Confirmar'" (click)="selecionarHora()"></x-opcao>`, ctx()).entries[0]!.rotulo).toBe('selecionar-hora');
     expect(tagTemplate('<a (click)="clickLink()" data-testid="ajuda-contato"></a>', ctx()).entries[0]!.rotulo).toBe('ajuda-contato');
     // Opções de um segment/select são o valor escolhido, nunca o rótulo do controle.
     const segment = tagTemplate('<ion-segment (ionChange)="selecionarAba($event)" value="lista"><ion-segment-button value="lista"><ion-label>Lista</ion-label></ion-segment-button><ion-segment-button value="mapa"><ion-label>Mapa</ion-label></ion-segment-button></ion-segment>', ctx());
