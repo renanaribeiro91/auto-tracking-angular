@@ -575,7 +575,7 @@ export class TemplateTagger {
       const priorRef = originalAttrs.get('data-at-ref');
       const prior = ctx.mode === 'ref' && priorRef ? decodeTrackingToken(priorRef) : null;
       if (priorRef && !prior) {
-        diagnostics.push({ code: 'TRACKING_REFERENCE_UNKNOWN', arquivo: ctx.relFile, linha: this.lineOf(html, m.index!), mensagem: `data-at-ref não é um token autocontido válido para o modo escolhido` });
+        diagnostics.push({ code: 'TRACKING_REFERENCE_UNKNOWN', arquivo: ctx.relFile, linha: this.lineOf(html, m.index!), mensagem: `data-at-ref ilegível para a lib instalada (outra versão ou edição manual): execute npm install e repita` });
         continue;
       }
       // Reconstituir atributos semânticos apenas em memória; o HTML permanece compacto.

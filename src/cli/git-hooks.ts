@@ -277,16 +277,28 @@ export class GitRepository {
 }
 
 /**
- * Versão exata declarada pelo consumidor e versão instalada precisam coincidir:
- * hooks rodando outra versão da lib gerariam contrato diferente do da esteira.
+ * A lib instalada precisa atender à versão declarada no package.json do consumidor: outra versão
+ * geraria ou leria um contrato diferente do da esteira (ex.: branch nova sem `npm install`).
+ * Aceita `x.y.z`, `^x.y.z`, `~x.y.z` e `>=x.y.z`; outra forma de faixa não é conferida.
  */
 export function installedVersionMismatch(root: string, packageName: string, installedVersion: string): string | null {
+  let declared: string | undefined;
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8')) as Record<string, Record<string, string> | undefined>;
-    const declared = manifest['dependencies']?.[packageName] ?? manifest['devDependencies']?.[packageName];
-    if (!declared || !/^\d+\.\d+\.\d+$/.test(declared) || declared === installedVersion) return null;
-    return `${packageName} instalado ${installedVersion}, package.json exige ${declared}: execute npm install`;
+    declared = (manifest['dependencies']?.[packageName] ?? manifest['devDependencies']?.[packageName])?.trim();
   } catch {
     return null;
   }
+  const range = declared ? /^(\^|~|>=)?v?(\d+)\.(\d+)\.(\d+)$/.exec(declared) : null;
+  const installed = /^(\d+)\.(\d+)\.(\d+)$/.exec(installedVersion);
+  if (!range || !installed) return null;
+  const [major, minor, patch] = range.slice(2).map(Number) as [number, number, number];
+  const [iMajor, iMinor, iPatch] = installed.slice(1).map(Number) as [number, number, number];
+  const atLeast = iMajor - major || iMinor - minor || iPatch - patch;
+  const satisfied = range[1] === '>=' ? atLeast >= 0
+    : range[1] === '^' ? atLeast >= 0 && iMajor === major && (major > 0 || iMinor === minor)
+      : range[1] === '~' ? atLeast >= 0 && iMajor === major && iMinor === minor
+        : atLeast === 0;
+  return satisfied ? null
+    : `${packageName} instalado ${installedVersion}, mas o package.json pede ${declared}: execute npm install e repita o comando`;
 }

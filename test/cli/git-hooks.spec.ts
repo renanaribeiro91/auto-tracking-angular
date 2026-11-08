@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, spawnSync } from 'child_process';
-import { hookBlock, pushedCommits, upsertHookBlock } from '../../src/cli/git-hooks.js';
+import { hookBlock, installedVersionMismatch, pushedCommits, upsertHookBlock } from '../../src/cli/git-hooks.js';
 
 describe('hooks git: bloco gerenciado pela lib', () => {
   it('cria hook novo e é idempotente', () => {
@@ -40,6 +40,23 @@ describe('hooks git: bloco gerenciado pela lib', () => {
     const sha = 'a'.repeat(40);
     expect(pushedCommits(`refs/heads/x ${sha} refs/heads/x ${'b'.repeat(40)}\nrefs/heads/y ${'0'.repeat(40)} refs/heads/y ${sha}\n`)).toEqual([sha]);
     expect(pushedCommits('')).toEqual([]);
+  });
+
+  it('versão instalada precisa atender à faixa declarada no package.json', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-versao-'));
+    try {
+      const check = (declared: string, installed: string) => {
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { 'auto-tracking-angular': declared } }));
+        return installedVersionMismatch(dir, 'auto-tracking-angular', installed);
+      };
+      expect(check('^2.3.0', '2.2.3')).toContain('execute npm install');
+      expect(check('^2.3.0', '2.3.1')).toBeNull();
+      expect(check('^2.3.0', '3.0.0')).toContain('pede ^2.3.0');
+      expect(check('~2.3.0', '2.4.0')).not.toBeNull();
+      expect(check('2.3.0', '2.3.0')).toBeNull();
+      expect(check('>=2.0.0', '2.9.9')).toBeNull();
+      expect(check('latest', '1.0.0')).toBeNull();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('monorepo: o bloco aponta para a pasta do app dentro do repositório', () => {
@@ -100,6 +117,22 @@ describe('hooks git: fluxo real de commit e push', () => {
     expect(commit('feat: tela').status).toBe(0);
     write('package-lock.json', JSON.stringify({ packages: { 'node_modules/auto-tracking-angular': { version: '0.0.1' } } }));
     expect(cli('hook', 'pre-push').status).toBe(0);
+  });
+
+  it('tracking com lib diferente da declarada ou token ilegível explica a causa e o arquivo, sem gravar nada', () => {
+    write('src/app.html', '<h1>Início</h1><button (click)="salvar()">Salvar</button>');
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': '^99.0.0' } }));
+    const stale = cli('apply');
+    expect(stale.status).not.toBe(0);
+    expect(stale.stdout + stale.stderr).toContain(`instalado ${libVersion}, mas o package.json pede ^99.0.0: execute npm install`);
+    expect(fs.readFileSync(path.join(root, 'src/app.html'), 'utf8')).not.toContain('data-at-ref');
+
+    write('package.json', JSON.stringify({ dependencies: { 'auto-tracking-angular': `^${libVersion}` } }));
+    write('src/app.html', '<h1>Início</h1><button data-at-ref="v1.invalido" (click)="salvar()">Salvar</button>');
+    const unknown = cli('apply');
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stdout + unknown.stderr).toContain('src/app.html:1');
+    expect(unknown.stdout + unknown.stderr).toMatch(/execute npm install/i);
   });
 
   it('instala, gera no commit, deixa commit sem mudança intacto e protege edição não preparada e o push', () => {

@@ -332,8 +332,13 @@ class AutoTrackingCli {
   ): Promise<Report> {
     if (dryRun) return this.applyResult(root, paths, result, summary, status, [], true);
 
-    const invalidManifest = result.diagnostics.find((d) => d.code === 'TRACKING_REFERENCE_UNKNOWN');
-    if (invalidManifest) throw new Error(`${invalidManifest.code}: ${invalidManifest.mensagem}`);
+    const unknown = result.diagnostics.filter((d) => d.code === 'TRACKING_REFERENCE_UNKNOWN');
+    if (unknown.length) {
+      throw new Error([`TRACKING_REFERENCE_UNKNOWN: ${unknown.length} data-at-ref ilegível(is); nada foi gravado.`,
+        ...unknown.slice(0, 5).map((d) => `  ${d.arquivo}:${d.linha}`), ...(unknown.length > 5 ? [`  … e mais ${unknown.length - 5}`] : []),
+        'Causa provável: o token foi gerado por outra versão da lib (branch trocada sem npm install) ou editado à mão.',
+        `Versão instalada: ${this.packageVersion()}. Execute npm install e repita; se persistir, restaure o arquivo pelo git.`].join('\n'));
+    }
     fs.mkdirSync(paths.outputDir, { recursive: true });
     this.applyChanges(result.changes);
     const written = result.changes.map((change) => path.relative(root, change.file));
@@ -554,6 +559,8 @@ class AutoTrackingCli {
     if (command !== 'apply' && command !== 'verify') {
       throw new Error(`comando desconhecido: ${command} (rode sem comando, ou use verify)`);
     }
+    const mismatch = installedVersionMismatch(root, 'auto-tracking-angular', this.packageVersion());
+    if (mismatch) throw new Error(mismatch);
 
     const json = args.includes('--json') || (!process.stdout.isTTY && !args.includes('--pretty'));
     const startedAt = Date.now();
