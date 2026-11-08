@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.1 — 2026-11-08
+
+### CLI
+
+- `tracking` e `verify` conferem, antes de analisar, se a lib instalada atende à versão do `package.json` (`x.y.z`, `^`, `~`, `>=`). Ao trocar de branch sem `npm install`, o comando para com "execute npm install" em vez de um erro de token. Os hooks passam a usar a mesma conferência com faixas.
+- `TRACKING_REFERENCE_UNKNOWN` lista arquivo e linha de cada `data-at-ref` ilegível, informa a versão instalada e a causa provável; nada é gravado.
+
 ## 2.3.0 — 2026-11-08
 
 ### Eventos
