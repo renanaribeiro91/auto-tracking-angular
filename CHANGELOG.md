@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.3 — 2026-11-08
+
+- Toda abertura de modal, alerta, menu ou dialog por código alcançada em produção entra no relatório e na planilha, nas telas que a alcançam: com o título real quando é fixo e `[titulo-do-modal-exibido]` quando é dinâmico.
+
 ## 2.3.2 — 2026-11-08
 
 - Componente já tagueado que não existe nas dependências instaladas (instalação incompleta) mantém a marcação e gera o aviso `COMPONENT_DEFINITION_MISSING`, em vez de perder eventos.
