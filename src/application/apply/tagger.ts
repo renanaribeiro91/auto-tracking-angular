@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { labelSlug, MAX_PROVEN_LABEL, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -30,6 +30,8 @@ export interface TagEntry {
   readonly opcao_selecionada_1?: string;
   /** Rótulos possíveis provados por lista estática do componente; o enviado é o do item clicado. */
   readonly rotulos?: readonly string[];
+  /** Nome exibido da aba, só nos cliques de uma tab bar. */
+  readonly tab_bar?: string;
   /** binding de origem no template, por exemplo `(click)` ou `(back) em <ui-header>` */
   readonly origem: string;
   readonly arquivo: string;
@@ -57,6 +59,8 @@ export interface TagContext {
   readonly selectionMethods?: ReadonlyMap<string, NumericSelection>;
   /** Valores literais de `propriedade` nos itens de uma lista estática da classe do template. */
   readonly listLabels?: (list: string, property: string) => readonly string[] | null;
+  /** Textos que o código comprova para uma expressão do template deste componente. */
+  readonly displayTexts?: (expression: string) => readonly string[] | null;
   /** Campos do tipo declarado do item de uma lista da classe; `null` sem prova do tipo. */
   readonly listItemFields?: (list: string) => readonly string[] | null;
   /** ids já usados no projeto; recebe os novos ids gerados */
@@ -136,6 +140,8 @@ export class TemplateTagger {
   /** Elemento do contrato (Tagueamento.Elemento) a partir da tag e do nome da interação */
   elementoFor(tag: string, attrs: ReadonlyMap<string, string>, interaction = ''): string {
     const t = `${tag} ${interaction}`.toLowerCase();
+    if (/tab-bar|tabbar|ion-tab-button/.test(t)) return 'tab-bar';
+    if (/(?:^|[-\s])tabs?(?:-|\s|$)|selectedtab/.test(t)) return 'aba';
     if (tag === 'a' || tag === 'ion-anchor' || attrs.has('routerLink') || attrs.has('[routerLink]') || attrs.has('href') || /link/.test(t)) return 'link';
     if (/select|calendar|datetime|date/.test(t)) return 'dropdown';
     if (/checkbox|toggle|check/.test(t) || (tag === 'input' && attrs.get('type') === 'checkbox')) return 'checkbox';
@@ -143,7 +149,7 @@ export class TemplateTagger {
     if (/overlay/.test(t)) return 'overlay';
     if (/carousel|carrossel|slide/.test(t)) return 'carrossel';
     if (/upload|arquivo|document/.test(t)) return 'arquivo';
-    if (/chip|segment|filtro|filter|tab-bar/.test(t)) return 'filtro';
+    if (/chip|segment|filtro|filter/.test(t)) return 'filtro';
     if (tag === 'ion-item' || /-item\b|lista|-card\b|card-/.test(t)) return 'lista';
     return 'botao';
   }
@@ -191,13 +197,15 @@ export class TemplateTagger {
    * ligado a variável). `null` quando não há expressão ou quando o nome indica dado
    * pessoal/de negócio: nesse caso o texto nunca é lido e o rótulo semântico vale.
    */
-  private dynamicLabelSource(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>): string | null {
+  private dynamicLabelSource(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext): string | null {
     const bound = BOUND_LABEL_ATTRIBUTES
-      .map((name) => attrs.get(name)).filter((value): value is string => !!value?.trim() && this.stringLiteral(value) === undefined);
+      .map((name) => attrs.get(name)).filter((value): value is string => !!value?.trim() && this.stringLiteral(value) === undefined && !this.technicalBinding(value, ctx));
     const close = html.indexOf(`</${tag}`, tagEnd);
     const inner = close === -1 || OPTION_CONTAINER_TAGS.has(tag)
       ? '' : html.slice(tagEnd, close).replace(/<!--[\s\S]*?-->/g, ' ');
     const interpolations = [...inner.matchAll(/\{\{\s*([\s\S]+?)\s*\}\}/g)].map((match) => match[1]!.replace(/\s+/g, ' '));
+    // Vários textos só em filhos são conteúdo (card, linha de lista); quem nomeia o gesto é a ação.
+    if (!bound.length && interpolations.length > 1 && !this.withoutChildren(inner).includes('{{')) return null;
     const expressions = [...bound, ...interpolations];
     if (!expressions.length) return /@(?:if|switch)\b|\*ngIf\b/.test(inner) ? 'conditional-text' : null;
     if (expressions.some((expression) => PERSONAL_DATA_EXPRESSION.test(this.words(expression)))) return null;
@@ -293,7 +301,7 @@ export class TemplateTagger {
   private provenLabels(masked: string, at: number, html: string, tag: string, tagEnd: number,
     attrs: ReadonlyMap<string, string>, ctx: TagContext): string[] {
     const close = html.indexOf(`</${tag}`, tagEnd);
-    const interpolation = close === -1 ? undefined : /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/.exec(html.slice(tagEnd, close))?.[1];
+    const interpolation = close === -1 ? undefined : /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/.exec(html.slice(tagEnd, close).replace(/<!--[\s\S]*?-->/g, ' ').replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' '))?.[1];
     const expressions = BOUND_LABEL_ATTRIBUTES.map((name) => attrs.get(name)).concat(interpolation);
     for (const expression of expressions) {
       if (!expression) continue;
@@ -302,7 +310,13 @@ export class TemplateTagger {
       const alternatives = (node: ts.Expression): string[] | null => {
         if (ts.isParenthesizedExpression(node)) return alternatives(node.expression);
         if (ts.isStringLiteralLike(node)) return looksLikeIdentifier(node.text) ? null : [labelSlug(node.text)];
-        if (!ts.isConditionalExpression(node)) return null;
+        if (!ts.isConditionalExpression(node)) {
+          const root = /^[A-Za-z_$][\w$]*/.exec(node.getText())?.[0];
+          // Variável declarada no template não é membro do componente.
+          if (!root || new RegExp(`(?:\\blet\\s+|\\bas\\s+|@for\\s*\\(\\s*)${root.replace(/\$/g, '\\$')}\\b`).test(html)) return null;
+          const texts = ctx.displayTexts?.(node.getText());
+          return texts?.length && !texts.some(looksLikeIdentifier) ? texts.map((text) => labelSlug(text)) : null;
+        }
         const yes = alternatives(node.whenTrue), no = alternatives(node.whenFalse);
         return yes && no && yes.length + no.length <= 64 ? [...yes, ...no] : null;
       };
@@ -388,9 +402,43 @@ export class TemplateTagger {
     return this.words(value).split('-').filter((word) => word && !TECHNICAL_LABEL_WORDS.has(word)).join('-');
   }
 
+  /** Conteúdo direto do elemento, sem os filhos e o que há dentro deles. */
+  private withoutChildren(inner: string): string {
+    const pair = /<([a-zA-Z][\w-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*(?:\/>|>(?:(?!<[a-zA-Z/])[\s\S])*<\/\1\s*>)/g;
+    let current = inner;
+    for (let previous = ''; previous !== current;) {
+      previous = current;
+      current = current.replace(pair, ' ');
+    }
+    return current;
+  }
+
+  /** Ligação que só produz identificador de teste (`ids.BTN_X`, `'btn-x-' + i`) não é texto para a pessoa. */
+  private technicalBinding(expression: string, ctx: TagContext): boolean {
+    const prefix = this.literalPrefix(expression);
+    return (!!prefix && looksLikeIdentifier(prefix)) || !!ctx.displayTexts?.(expression)?.every(looksLikeIdentifier);
+  }
+
+  /** Método em inglês vira o verbo do negócio; `toggleChange` não repete o `change` técnico. */
+  private businessWords(handler: string): string {
+    return this.semanticWords(handler).split('-').filter((word, index) => !index || word !== 'change')
+      .map((word, index) => (index ? word : ACTION_VERBS.get(word) ?? word)).join('-');
+  }
+
+  /** Texto do botão que envia o formulário: é o que a pessoa toca. */
+  private submitLabel(html: string, tagEnd: number): string {
+    const close = html.indexOf('</form', tagEnd);
+    for (const match of html.slice(tagEnd, close === -1 ? undefined : close).matchAll(START_TAG)) {
+      const attrs = this.analysis.parseAttrs(match[2] ?? '');
+      if (attrs.get('type') !== 'submit' && attrs.get('[type]') !== "'submit'") continue;
+      return this.staticLabel(html, match[1]!.toLowerCase(), tagEnd + match.index! + match[0].length, attrs);
+    }
+    return '';
+  }
+
   /** Nome da ação quando não há texto: handler, depois data-testid e output, sem ruído técnico. */
   private actionName(handler: string, expression: string, ...alternatives: (string | undefined)[]): string {
-    const verb = this.semanticWords(handler);
+    const verb = this.businessWords(handler);
     const argument = this.literalArg(expression);
     // editarLocal('local') não repete a palavra já presente no handler.
     const fromHandler = argument && `-${verb}-`.includes(`-${argument}-`) ? verb
@@ -670,14 +718,16 @@ export class TemplateTagger {
         }
       }
 
-      const label = tag === 'form' && (attrs.has('(ngSubmit)') || attrs.has('(submit)'))
-        ? ''
+      const visibleLabel = tag === 'form' && (attrs.has('(ngSubmit)') || attrs.has('(submit)'))
+        ? this.submitLabel(html, tagEnd)
         : this.staticLabel(html, tag, tagEnd, attrs);
-      const rotulos = label ? [] : this.provenLabels(masked, m.index!, html, tag, tagEnd, attrs, ctx);
+      const proven = visibleLabel ? [] : this.provenLabels(masked, m.index!, html, tag, tagEnd, attrs, ctx);
+      const label = visibleLabel || (proven.length === 1 ? proven[0]! : '');
+      const rotulos = proven.length > 1 ? proven : [];
       // Texto de menu/serviço muda sem novo build: o runtime lê o valor visível no clique.
       const boundLabel = BOUND_LABEL_ATTRIBUTES
-        .some((name) => attrs.has(name) && this.stringLiteral(attrs.get(name)!) === undefined);
-      const dynamicSource = (label && !boundLabel) || rotulos.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs);
+        .some((name) => attrs.has(name) && this.stringLiteral(attrs.get(name)!) === undefined && !this.technicalBinding(attrs.get(name)!, ctx));
+      const dynamicSource = (label && !boundLabel) || proven.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs, ctx);
       const dynamicIds: string[] = [];
       const selectionSource = this.listSelection(html, tag, tagEnd, attrs, ctx);
       if (selectionSource === undefined) diagnostics.push({ code: 'OPTION_PUBLIC_VALUE_UNPROVEN', arquivo: ctx.relFile, linha,
@@ -757,7 +807,7 @@ export class TemplateTagger {
           desired.set('data-at-event', event);
           derived.add('data-at-event');
         }
-        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
+        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos } : {}), ...(elemento === 'tab-bar' && label ? { tab_bar: label } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
       }
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
@@ -811,7 +861,7 @@ export class TemplateTagger {
             !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
           // Ações distintas do mesmo componente (ver, excluir) não podem chegar iguais ao Firebase.
           const verb = activeOutputs.length > 1 && ownLabel && !dynamicLabel && !rotulos.length
-            ? slug(this.words(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action|on|handle)-/, '').replace(/^click$/, '')) : '';
+            ? slug(this.words(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action|on|handle)-/, '').replace(/^click$/, '').replace(/^[a-z]+/, (word) => ACTION_VERBS.get(word) ?? word)) : '';
           const rotulo = verb && !slug(ownLabel).includes(verb) ? slug(`${verb}-${ownLabel}`, MAX_PROVEN_LABEL) : slug(ownLabel) || name;
           const solePriorOutput = previous?.length === 1 && !prior?.click ? previous[0] : undefined;
           const migratedId = !known.has(output) && activeOutputs.length === 1 &&
@@ -825,10 +875,19 @@ export class TemplateTagger {
             portalAnchors.set(anchor, anchored);
           }
           if (dynamicLabel && !dynamicIds.includes(id)) dynamicIds.push(id);
-          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
+          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos } : {}), ...(elemento === 'tab-bar' && ownLabel ? { tab_bar: ownLabel } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
           if (ownLabel && this.labelBehaviorConflict(ownLabel, handler)) {
             diagnostics.push({ code: 'VISIBLE_LABEL_BEHAVIOR_CONFLICT', arquivo: ctx.relFile, linha, mensagem: `texto '${ownLabel}' contradiz o handler '${handler}'; ação não reclassificada pelo texto` });
           }
+        }
+        // O runtime envia só a primeira saída de cada gesto: saída sem gesto próprio nunca dispara e não pode constar na evidência.
+        const firesFirst = (item: { id: string; trigger: OutputTrigger }): boolean => outputs.find((other) => other.trigger.event === item.trigger.event
+          && (other.trigger.selector === item.trigger.selector || other.trigger.selector === ':host'))?.id === item.id;
+        const silent = new Set(outputs.filter((item) => !outputs.some((other) => other.id === item.id && firesFirst(other))
+          && ![...portalAnchors.values()].flat().some((anchored) => anchored.id === item.id)).map((item) => item.id));
+        if (silent.size) {
+          outputs.splice(0, outputs.length, ...outputs.filter((item) => !silent.has(item.id)));
+          entries.splice(0, entries.length, ...entries.filter((item) => !silent.has(item.id)));
         }
         if (outputs.length) {
           desired.set('data-at-outputs', this.encodeOutputs(outputs));

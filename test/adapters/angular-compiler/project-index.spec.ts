@@ -45,6 +45,23 @@ describe('AngularProjectIndexer', () => {
     }
   });
 
+  it('rota-casca com filho de caminho vazio é casca; sem esse filho, a própria rota é destino', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-index-'));
+    try {
+      write(root, 'casca.page.ts', `@Component({ selector: 'app-casca', template: '' }) export class CascaPage {}`);
+      write(root, 'destino.page.ts', `@Component({ selector: 'app-destino', template: '' }) export class DestinoPage {}`);
+      write(root, 'routes.ts', `import { CascaPage } from './casca.page'; import { DestinoPage } from './destino.page'; export const routes = [
+        { path: 'a', component: CascaPage, children: [{ path: '', redirectTo: 'x', pathMatch: 'full' }] },
+        { path: 'b', component: DestinoPage, children: [{ path: 'y', loadChildren: () => null }] }];`);
+
+      const index = new AngularProjectIndexer().buildProjectIndex(root);
+      expect(index.shellComponents).toEqual(new Set([`${path.join(root, 'casca.page.ts')}#CascaPage`]));
+      expect(index.routedComponents.size).toBe(2);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('resolve rota para a declaração importada quando existem classes homônimas', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-index-'));
     try {
@@ -113,5 +130,68 @@ describe('AngularProjectIndexer', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('texto comprovado no código, em qualquer forma de escrita', () => {
+  const texts = (classBody: string, expression: string, extra: Record<string, string> = {}) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-texto-'));
+    try {
+      write(root, 'pagina.page.ts', `@Component({ selector: 'app-pagina', template: '' }) export class PaginaPage { ${classBody} }`);
+      for (const [file, content] of Object.entries(extra)) write(root, file, content);
+      return new AngularProjectIndexer().buildProjectIndex(root).displayTexts!(`${path.join(root, 'pagina.page.ts')}#PaginaPage`, expression);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it.each([
+    ['propriedade literal', `botao = 'Salvar';`, 'botao', ['Salvar']],
+    ['objeto na classe', `textos = { BOTAO: 'Salvar' };`, 'textos.BOTAO', ['Salvar']],
+    ['ternário entre literal e membro', `outro = 'Voltar'; aberto = false;`, `aberto ? 'Salvar' : outro`, ['Salvar', 'Voltar']],
+    ['atribuições comprovadas', `botao = 'A'; ngOnInit() { this.botao = 'B'; }`, 'botao', ['A', 'B']],
+    ['getter', `get botao() { return 'Salvar'; }`, 'botao', ['Salvar']],
+    ['método sem argumentos', `aberto = true; rotulo() { if (this.aberto) { return 'A'; } return 'B'; }`, 'rotulo()', ['A', 'B']],
+  ])('%s', (_name, body, expression, expected) => {
+    expect(texts(body, expression)).toEqual(expected);
+  });
+
+  it('constante movida para outro arquivo mantém o valor; valor alterado acompanha', () => {
+    const body = `readonly textos = TEXTOS;`;
+    expect(texts(body, 'textos.BOTAO', { 'textos.ts': `export const TEXTOS = { BOTAO: 'Salvar' };` })).toEqual(['Salvar']);
+    expect(texts(body, 'textos.BOTAO', { 'textos.ts': `export const TEXTOS = { BOTAO: 'Confirmar' };` })).toEqual(['Confirmar']);
+  });
+
+  it.each([
+    ['campo sobrescrito em runtime', `textos = { BOTAO: 'A' }; ngOnInit(p: any) { this.textos.BOTAO = p.x; }`, 'textos.BOTAO'],
+    ['atribuição não comprovada', `botao = 'A'; ngOnInit(p: any) { this.botao = p.x; }`, 'botao'],
+    ['sem valor no código', `botao: string;`, 'botao'],
+    ['pipe', `botao = 'A';`, `botao | translate`],
+    ['observable', `botao$ = of('A');`, `botao$ | async`],
+    ['método com argumento', `rotulo(x: string) { return x; }`, `rotulo('a')`],
+    ['membro inexistente (herança)', ``, 'botao'],
+  ])('%s continua só em runtime', (_name, body, expression) => {
+    expect(texts(body, expression)).toBeNull();
+  });
+
+  const inputTexts = (child: string, parents: readonly string[]) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-input-'));
+    try {
+      write(root, 'filho.component.ts', `@Component({ selector: 'app-filho', template: '' }) export class FilhoComponent { ${child} }`);
+      parents.forEach((template, index) => write(root, `pai${index}.page.ts`, `@Component({ selector: 'app-pai${index}', template: \`${template}\` }) export class Pai${index}Page { texto = 'Do pai'; }`));
+      return new AngularProjectIndexer().buildProjectIndex(root).displayTexts!(`${path.join(root, 'filho.component.ts')}#FilhoComponent`, 'rotulo');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it('@Input reúne o valor de todos os usos, inclusive o padrão', () => {
+    expect(inputTexts(`@Input() rotulo = 'Padrao';`, [`<app-filho rotulo="Fixo"></app-filho>`, `<app-filho [rotulo]="texto"></app-filho>`, `<app-filho></app-filho>`])).toEqual(['Fixo', 'Do pai', 'Padrao']);
+  });
+
+  it('@Input com um uso desconhecido, variável de template ou sem uso fica em runtime', () => {
+    expect(inputTexts(`@Input() rotulo = 'Padrao';`, [`<app-filho [rotulo]="apiValor"></app-filho>`])).toBeNull();
+    expect(inputTexts(`@Input() rotulo = 'Padrao';`, [`<ng-container *ngFor="let texto of lista"><app-filho [rotulo]="texto"></app-filho></ng-container>`])).toBeNull();
+    expect(inputTexts(`@Input() rotulo = 'Padrao';`, [])).toBeNull();
   });
 });

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.7 — 2026-11-09
+
+- `relatorio.json` traz em `eventos[]` os parâmetros de cada disparo, da mesma fonte da planilha, inclusive `subfuncionalidade`; saem `funcionalidade` e `tela` do componente dono, que divergiam do enviado.
+- Coluna **Tab bar** na planilha com o nome da aba clicada; cliques de tab bar passam a enviar `elemento: tab-bar` em vez de `filtro`.
+- O total de Interações do Resumo é a soma das abas.
+- Rota-casca com filho de caminho vazio não lista `screen_view`, que nunca dispara: o evento é o da tela filha.
+- Saída cujo gesto já pertence a outra saída do mesmo elemento sai da evidência: o runtime envia só a primeira.
+- Texto de botão vindo de constante, objeto, getter, ternário, `this.membro` ou `@Input` com todos os usos comprovados aparece com o nome real; valor alterado fora do que o código comprova (por exemplo, `queryParams`) segue como marcador.
+- Identificador de teste ligado em `aria-label` não esconde o texto real; formulário usa o texto do botão de envio; método em inglês vira o verbo do rótulo; aba de página é `elemento: aba`; card com vários textos é nomeado pela ação.
+
 ## 2.3.6 — 2026-11-09
 
 - `subfuncionalidade` só é enviada e preenchida na planilha quando a tela é um submódulo; na tela raiz do módulo não vai nada.

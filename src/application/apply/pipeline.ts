@@ -10,6 +10,7 @@ import { ENGINE_VERSION } from './constants.js';
 import { overlayGestures, overlayHeading } from './overlay-gestures.js';
 import { tagSurface, untagSurface } from './surface-tagger.js';
 import { resolveProductionUsage } from './production-usage.js';
+import { firedEvents } from './fired-events.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
@@ -200,6 +201,7 @@ export class TrackingPipeline {
           catalog,
           selectionMethods: numericSelectionMethods(t.c, index.components),
           listLabels: staticListLabels(t.c),
+          displayTexts: (expression) => index.displayTexts?.(t.c.key, expression) ?? null,
           listItemFields: listItemFields(t.c),
           usedIds,
           claimedIds,
@@ -212,7 +214,7 @@ export class TrackingPipeline {
         // componente raiz (casca do app) aparece em todas as telas
         const resolved = screensOf(t.c);
         const telas = resolved.length ? resolved : [t.c.def.selectors.includes(config.root) ? '*' : ORIGIN_SCREEN];
-        entries.push(...result.entries.map((e) => ({ ...e,
+        entries.push(...result.entries.filter((e) => e.evento !== 'screen_view' || !index.shellComponents?.has(t.c.key)).map((e) => ({ ...e,
           telas: e.evento === 'screen_view' ? [`${e.funcionalidade}:${e.tela}`] : telas,
           vinculo_tela: e.evento === 'screen_view' || index.routedComponents.has(t.c.key) ? 'rota' as const : 'origem' as const,
         })));
@@ -319,7 +321,11 @@ export class TrackingPipeline {
         mensagem: `interação '${entry.id}' sem contrato de vínculo com a tela de origem`,
       });
     }
-    const relatorio = JSON.stringify({ entries, diagnostics }, null, 2) + '\n';
+    // O relatório diz onde está no código e o que dispara: parâmetro do evento só existe em `eventos`, sem segunda versão.
+    const relatorio = JSON.stringify({ entries: entries.map((entry) => ({
+      id: entry.id, owner: entry.owner, evento: entry.evento, origem: entry.origem, arquivo: entry.arquivo, linha: entry.linha, telas: entry.telas,
+      ...(entry.vinculo_tela ? { vinculo_tela: entry.vinculo_tela } : {}), ...(entry.tab_bar ? { tab_bar: entry.tab_bar } : {}), ...(entry.ref ? { ref: entry.ref } : {}),
+      eventos: firedEvents(entry, config.product).map((fired) => fired.params) })), diagnostics }, null, 2) + '\n';
     return { config, paths, changes, entries, diagnostics, relatorio, templates };
   }
 

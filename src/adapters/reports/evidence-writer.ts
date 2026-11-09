@@ -8,7 +8,8 @@ import type { EvidenceRow as Row, ModuleRow, WorkbookBranding, WorkbookInput } f
 import { createWorksheetBackground } from './watermark-background.js';
 import { loadWorkbookProvider } from './excel-workbook.js';
 import { inspectXlsx, readBoundedFile, readBrandingPng, XLSX_LIMITS } from './xlsx-safety.js';
-import { ORIGIN_SCREEN, isStaticScreenReference, screenPath } from '../../domain/contract/screen-binding.js';
+import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
+import { firedEvents } from '../../application/apply/fired-events.js';
 
 export type { WorkbookBranding, WorkbookInput } from './evidence-writer.types.js';
 
@@ -128,25 +129,20 @@ export class EvidenceWorkbookWriter {
       if (!entry.telas.length || !entry.telas.every((screen) => screen === ORIGIN_SCREEN || screen === '*' || isStaticScreenReference(screen))) {
         throw new Error(`interação '${entry.id}' sem vínculo de tela`);
       }
-      const resolvedScreens = entry.telas.filter(isStaticScreenReference);
-      for (const screenRef of resolvedScreens.length ? resolvedScreens : [null]) {
-        const parts = screenRef?.split(':');
-        const modulo = parts?.[0] ?? entry.funcionalidade;
-        const screenName = parts?.[1] ?? '';
-        const screen = `{ambiente}:${input.product}:${screenRef ? screenPath(modulo, screenName) : '{funcionalidade-de-origem}:{tela-de-origem}'}`;
+      for (const { modulo, params } of firedEvents(entry, input.product)) {
         rows.push({
           modulo,
           id: entry.id,
           evento: entry.evento,
-          // screen_view não envia ação: a planilha mostra só o que o evento leva.
-          acao: entry.evento === 'screen_view' ? '' : entry.acao,
-          elemento: entry.elemento,
-          funcionalidade: screenRef ? modulo : '{funcionalidade-de-origem}',
-          subfuncionalidade: !screenRef ? '{tela-de-origem}' : screenName === modulo ? '' : screenName,
-          tela: screen,
-          categoria: entry.evento === 'screen_view' ? '' : screen,
-          rotulo: entry.rotulos?.length ? `Um de: ${entry.rotulos.join('; ')}` : entry.rotulo,
-          opcaoSelecionada: entry.opcao_selecionada_1 ?? '',
+          acao: params.acao ?? '',
+          elemento: params.elemento ?? '',
+          funcionalidade: params.funcionalidade,
+          subfuncionalidade: params.subfuncionalidade ?? '',
+          tela: params.tela,
+          categoria: params.categoria ?? '',
+          rotulo: params.rotulo ?? '',
+          tabBar: entry.tab_bar ?? '',
+          opcaoSelecionada: params.opcao_selecionada_1 ?? '',
           origem: entry.origem,
           arquivo: entry.arquivo,
           linha: entry.linha,
@@ -159,8 +155,7 @@ export class EvidenceWorkbookWriter {
     // Uma linha por evento que chega ao Firebase; todos os pontos do código continuam no relatorio.json.
     const distinct = new Map<string, Row>();
     for (const row of rows) {
-      // Sem tela resolvida não há como afirmar que é o mesmo evento.
-      const key = JSON.stringify([row.modulo, row.tela, row.evento, row.acao, row.elemento, row.rotulo, row.opcaoSelecionada, row.tela.includes('{tela-de-origem}') ? row.id : '']);
+      const key = JSON.stringify([row.modulo, row.tela, row.evento, row.acao, row.elemento, row.rotulo, row.opcaoSelecionada]);
       if (!distinct.has(key)) distinct.set(key, row);
     }
     return [...distinct.values()];
@@ -241,7 +236,8 @@ export class EvidenceWorkbookWriter {
     const indicators: readonly number[] = [
       modules.length,
       new Set(rows.filter((row) => row.evento === 'screen_view').map((row) => `${row.modulo}|${row.tela}`)).size,
-      new Set(rows.filter((row) => row.evento === 'click').map((row) => row.id)).size,
+      // Mesma conta do índice por módulo: o total é a soma das abas.
+      rows.filter((row) => row.evento === 'click').length,
     ];
     indicators.forEach((value, index) => {
       const labelCell = summary.getRow(WORKBOOK_LAYOUT.summaryRows.indicatorLabels).getCell(WORKBOOK_LAYOUT.moduleIndexColumn + index);

@@ -5,6 +5,7 @@ import * as path from 'path';
 import JSZip from 'jszip';
 import { EvidenceWorkbookWriter, workbookSignature, writeEvidenceWorkbook } from '../../src/adapters/reports/evidence-writer.js';
 import type { TagEntry } from '../../src/application/apply/tagger.js';
+import { firedEvents } from '../../src/application/apply/fired-events.js';
 
 const entry = (over: Partial<TagEntry>): TagEntry => ({
   id: 'reembolso-tipo-avancar', owner: 'mob', evento: 'click', acao: 'clique', elemento: 'botao', funcionalidade: 'reembolso',
@@ -86,7 +87,7 @@ describe('planilha de evidência', () => {
     const watermarkPng = path.resolve('test/fixtures/watermark.png');
     await writeEvidenceWorkbook(file, {
       owner: 'mob', product: 'saude', branding: { watermarkPng },
-      entries: [entry({}), entry({ id: 'app-sair', telas: ['*'] }), entry({ id: 'reutilizavel', telas: ['@origin'], vinculo_tela: 'origem' })],
+      entries: [entry({}), entry({ id: 'app-sair', telas: ['*'] }), entry({ id: 'reutilizavel', rotulo: 'reutilizar', telas: ['@origin'], vinculo_tela: 'origem' })],
     }, 'sig');
     const zip = await JSZip.loadAsync(fs.readFileSync(file));
     const resumo = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
@@ -180,4 +181,40 @@ it('eventos iguais na mesma tela viram uma linha', async () => {
       expect(sheet.getRow(4).getCell(header.indexOf('Subfuncionalidade')).value).toBe('tipo');
       expect(sheet.getRow(4).getCell(header.indexOf('Ambiente')).value).toBe('{ambiente}');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+it('relatório e planilha usam o mesmo evento: raiz sem subfuncionalidade, submódulo com, screen_view só com a tela', () => {
+  const base = { id: 'x', owner: 'mob', origem: 'rota', arquivo: 'a.html', linha: 1, funcionalidade: 'dono', tela: 'dono' } as const;
+  expect(firedEvents({ ...base, evento: 'click', acao: 'clique', elemento: 'botao', rotulo: 'ok', telas: ['home:home'] }, 'saude')).toEqual([{ modulo: 'home', params: {
+    ambiente: '{ambiente}', produto: 'saude', funcionalidade: 'home', tela: '{ambiente}:saude:home', categoria: '{ambiente}:saude:home', elemento: 'botao', rotulo: 'ok', acao: 'clique' } }]);
+  expect(firedEvents({ ...base, evento: 'screen_view', acao: 'visualizacao', elemento: '', rotulo: '', telas: ['home:inicio'] }, 'saude')[0]!.params).toEqual({
+    ambiente: '{ambiente}', produto: 'saude', funcionalidade: 'home', subfuncionalidade: 'inicio', tela: '{ambiente}:saude:home:inicio' });
+  expect(firedEvents({ ...base, evento: 'click', acao: 'clique', elemento: 'botao', rotulo: 'ok', telas: ['*'] }, 'saude')[0]!.params).toMatchObject({
+    funcionalidade: '{funcionalidade-de-origem}', subfuncionalidade: '{tela-de-origem}' });
+});
+
+it('coluna Tab bar traz a aba clicada, o Resumo soma as abas e linhas iguais sem tela resolvida viram uma', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-tabbar-'));
+  try {
+    const file = path.join(root, 'e.xlsx');
+    await writeEvidenceWorkbook(file, { owner: 'app', product: 'produto', branding: {}, entries: [
+      entry({ id: 'a', elemento: 'tab-bar', rotulo: 'clube', tab_bar: 'Clube mais Saúde' }),
+      entry({ id: 'b', rotulo: 'outro' }),
+      entry({ id: 'b2', rotulo: 'outro', telas: ['reembolso:lista'] }),
+      entry({ id: 'c', rotulo: 'x', telas: ['*'], funcionalidade: 'reembolso' }),
+      entry({ id: 'c2', rotulo: 'x', telas: ['*'], funcionalidade: 'reembolso' }),
+    ] }, 'sig');
+    const ExcelJS = await loadWorkbookProvider();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(file);
+    const sheet = workbook.getWorksheet('Reembolso')!;
+    const header = sheet.getRow(2).values as unknown[];
+    const column = header.indexOf('Tab bar');
+    const values = Array.from({ length: sheet.rowCount - 2 }, (_, index) => sheet.getRow(index + 3).getCell(column).value ?? '');
+    expect(values.filter(Boolean)).toEqual(['Clube mais Saúde']);
+    expect(sheet.rowCount - 2).toBe(4);
+    expect(workbook.getWorksheet('Resumo')!.getCell('D4').value).toBe(4);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

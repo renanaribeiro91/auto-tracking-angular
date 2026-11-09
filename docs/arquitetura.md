@@ -132,7 +132,7 @@ O runtime deve ser passivo: nunca bloquear navegação, impedir clique ou transf
 
 | Arquivo | Conteúdo |
 |---|---|
-| `relatorio.json` | `entries[]` (uma por interação/tela) e `diagnostics[]`; sem timestamp, determinístico |
+| `relatorio.json` | `entries[]` (uma por ponto do código: onde está e `eventos[]`, os parâmetros de cada disparo, da mesma fonte da planilha; parâmetro do evento não se repete fora de `eventos`) e `diagnostics[]`; sem timestamp, determinístico |
 | `evidencia-tagueamento.xlsx` | **Resumo** (indicadores e índice de módulos) e **uma aba por módulo**; componentes que nenhuma rota alcança ficam em **Componentes globais**. Identidade visual configurável; sem dado de usuário |
 | `cache/estado.json` | Fingerprint das entradas e hashes do relatório e da planilha; independe de máquina |
 

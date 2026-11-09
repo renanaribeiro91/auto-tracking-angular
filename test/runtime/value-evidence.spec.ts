@@ -46,7 +46,7 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
     expect(run().changes).toEqual([]);
     expect(fs.readFileSync(path.join(root, 'src/features/catalogo/choices.ts'), 'utf8')).toContain('constructor(@Inject(AutoTrackingSurfaces) private tracking: AutoTrackingSurfaces | null)');
     expect(fs.readFileSync(path.join(root, 'src/features/catalogo/choices.ts'), 'utf8')).toContain("import { AutoTrackingSurfaces }");
-    const entries = JSON.parse(result.relatorio).entries as typeof result.entries;
+    const entries = (JSON.parse(result.relatorio).entries as (typeof result.entries[number] & { eventos: object[] })[]).map((entry) => ({ ...entry, ...entry.eventos[0] })) as typeof result.entries;
     const choice = entries.find((entry) => entry.id === 'opcoes-escolher')!;
     const selection = entries.find((entry) => entry.origem === '(change)')!;
     expect(selection).toMatchObject({rotulo:'[rotulo-do-botao-exibido]',opcao_selecionada_1:'[valor-selecionado]'});

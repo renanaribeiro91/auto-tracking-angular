@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
+import { START_TAG, TemplateAnalysis } from '../../application/apply/template-analysis.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
 import type { OverlayDeclaration, OverlayVariant, ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
 import { OVERLAY_API, OVERLAY_BUTTON_LIST, OVERLAY_BUTTON_TEXT, OVERLAY_CONTROLLER, OVERLAY_TITLE_PROPERTIES, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
@@ -320,6 +321,13 @@ export class AngularProjectIndexer {
   /** Constantes de módulo, enums e estáticos por nome; nome ambíguo fica de fora. */
   private statics = new Map<string, ts.Expression | null>();
   private resolving = new Set<ts.Node>();
+  /** Componentes do índice atual, para seguir `@Input` até os templates que o usam. */
+  private templateContext: {
+    readonly components: readonly ComponentInfo[];
+    readonly declaration: (key: string) => ts.ClassDeclaration | undefined;
+    readonly external: ReadonlySet<string>;
+    readonly createdByCode: (className: string) => boolean;
+  } | null = null;
 
   private collectStatics(sourceFiles: ReadonlyMap<string, ts.SourceFile>): void {
     this.statics = new Map();
@@ -351,6 +359,159 @@ export class AngularProjectIndexer {
     }
   }
 
+  /** Textos que o código comprova para uma expressão do template; `null` se algum caminho só existe em runtime. */
+  private templateTexts(owner: ts.ClassDeclaration, expression: string): readonly string[] | null {
+    const texts = this.expressionTexts(owner, expression, new Set());
+    return texts ? [...new Set(texts)] : null;
+  }
+
+  private expressionTexts(owner: ts.ClassDeclaration, expression: string, visiting: Set<string>): string[] | null {
+    const statement = ts.createSourceFile('expression.ts', `(${expression})`, ts.ScriptTarget.Latest, true).statements[0];
+    return statement && ts.isExpressionStatement(statement) ? this.provenTexts(statement.expression, owner, true, visiting) : null;
+  }
+
+  private provenTexts(expression: ts.Expression, owner: ts.ClassDeclaration, template: boolean, visiting: Set<string>): string[] | null {
+    let value = expression;
+    while (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isNonNullExpression(value)) value = value.expression;
+    if (!template) {
+      const local = this.localValue(value);
+      if (local !== value) return this.provenTexts(local, owner, false, visiting);
+    }
+    if (ts.isStringLiteralLike(value)) return [value.text];
+    const union = (...sides: ts.Expression[]): string[] | null => {
+      const lists = sides.map((side) => this.provenTexts(side, owner, template, visiting));
+      return lists.every(Boolean) ? lists.flatMap((list) => list!) : null;
+    };
+    if (ts.isConditionalExpression(value)) return union(value.whenTrue, value.whenFalse);
+    if (ts.isBinaryExpression(value) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(value.operatorToken.kind)) return union(value.left, value.right);
+    if (ts.isCallExpression(value)) {
+      const callee = value.arguments.length ? null : this.memberPath(value.expression, template);
+      return callee?.path.length === 0 ? this.memberTexts(owner, callee.root, [], visiting) : null;
+    }
+    const member = this.memberPath(value, template);
+    return member ? this.memberTexts(owner, member.root, member.path, visiting) : null;
+  }
+
+  /** `this.a.b` na classe e `a.b` no template, onde o contexto implícito é o componente. */
+  private memberPath(expression: ts.Expression, template: boolean): { root: string; path: string[] } | null {
+    const path: string[] = [];
+    let node = expression;
+    while (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isNonNullExpression(node)) {
+      if (!ts.isNonNullExpression(node)) {
+        const argument = ts.isElementAccessExpression(node) ? node.argumentExpression : undefined;
+        const key = ts.isPropertyAccessExpression(node) ? node.name.text : argument && (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) ? argument.text : undefined;
+        if (key === undefined) return null;
+        path.unshift(key);
+      }
+      node = node.expression;
+    }
+    if (template) return ts.isIdentifier(node) ? { root: node.text, path } : null;
+    const [root, ...rest] = path;
+    return node.kind === ts.SyntaxKind.ThisKeyword && root ? { root, path: rest } : null;
+  }
+
+  /** Inicializador e toda atribuição precisam ser comprovados; `@Input` e herança chegam de fora da classe. */
+  private memberTexts(owner: ts.ClassDeclaration, name: string, path: readonly string[], visiting: Set<string>): string[] | null {
+    const member = owner.members.find((item) => item.name?.getText() === name);
+    const visit = `${owner.name?.text}.${name}`;
+    if (!member || visiting.has(visit)) return null;
+    visiting.add(visit);
+    try {
+      if (ts.isGetAccessor(member) || ts.isMethodDeclaration(member)) {
+        if (path.length || !member.body || member.parameters.length) return null;
+        const returned: ts.Expression[] = [];
+        const collect = (node: ts.Node): void => {
+          if (ts.isFunctionLike(node)) return;
+          if (ts.isReturnStatement(node) && node.expression) returned.push(node.expression);
+          ts.forEachChild(node, collect);
+        };
+        ts.forEachChild(member.body, collect);
+        const lists = returned.map((item) => this.provenTexts(item, owner, false, visiting));
+        return lists.length && lists.every(Boolean) ? lists.flatMap((list) => list!) : null;
+      }
+      if (!ts.isPropertyDeclaration(member)) return null;
+      const decorators = ts.getDecorators(member);
+      if (decorators?.length) return path.length ? null : this.inputTexts(owner, name, member, decorators, visiting);
+      const { values, mutated } = this.memberAssignments(owner, name);
+      const sources = [...(member.initializer ? [member.initializer] : []), ...values];
+      if (mutated || !sources.length) return null;
+      const lists = sources.map((source) => {
+        const value = path.reduce<ts.Expression | undefined>((current, key) => current && this.propertyOf(current, key), source);
+        return value ? this.provenTexts(value, owner, false, visiting) : null;
+      });
+      return lists.every(Boolean) ? lists.flatMap((list) => list!) : null;
+    } finally {
+      visiting.delete(visit);
+    }
+  }
+
+  private memberAssignments(owner: ts.ClassLikeDeclaration, name: string): { values: ts.Expression[]; mutated: boolean } {
+    const values: ts.Expression[] = [];
+    let mutated = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const target = this.memberPath(node.left, false);
+        if (target?.root === name) {
+          if (target.path.length || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) mutated = true;
+          else values.push(node.right);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(owner);
+    return { values, mutated };
+  }
+
+  /** `@Input` com todos os usos no projeto comprovados; aberto por código ou por rota recebe valor de fora dos templates. */
+  private inputTexts(owner: ts.ClassDeclaration, name: string, member: ts.PropertyDeclaration, decorators: readonly ts.Decorator[], visiting: Set<string>): string[] | null {
+    const call = decorators.map((item) => item.expression).find((item): item is ts.CallExpression => ts.isCallExpression(item) && item.expression.getText() === 'Input');
+    const context = this.templateContext;
+    if (!call || !context) return null;
+    const aliasArgument = call.arguments[0];
+    if (aliasArgument && !ts.isStringLiteralLike(aliasArgument)) return null;
+    const alias = aliasArgument && ts.isStringLiteralLike(aliasArgument) ? aliasArgument.text : name;
+    const component = context.components.find((item) => context.declaration(item.key) === owner);
+    if (!component || context.external.has(component.key) || context.createdByCode(component.className)
+      || !component.def.selectors.length || component.def.selectors.some((selector) => !/^[a-z][\w-]*$/.test(selector))) return null;
+    const analysis = new TemplateAnalysis();
+    const texts: string[] = [];
+    let uses = 0;
+    for (const parent of context.components) {
+      const html = parent.def.template.replace(/<!--[\s\S]*?-->/g, '');
+      for (const tag of html.matchAll(START_TAG)) {
+        if (!component.def.selectors.includes(tag[1]!.toLowerCase())) continue;
+        uses++;
+        const attrs = analysis.parseAttrs(tag[2] ?? '');
+        const fixed = attrs.get(alias);
+        const bound = attrs.get(`[${alias}]`);
+        let values: readonly string[] | null;
+        if (fixed !== undefined) values = fixed.includes('{{') ? null : [fixed];
+        else if (bound !== undefined) {
+          const root = /^[A-Za-z_$][\w$]*/.exec(bound.trim())?.[0];
+          const declared = root && new RegExp(`(?:\\blet\\s+|\\bas\\s+|@for\\s*\\(\\s*)${root.replace(/\$/g, '\\$')}\\b`).test(html);
+          const parentClass = context.declaration(parent.key);
+          values = declared || !parentClass ? null : this.expressionTexts(parentClass, bound, visiting);
+        } else values = member.initializer ? this.provenTexts(member.initializer, owner, false, visiting) : null;
+        if (!values) return null;
+        texts.push(...values);
+      }
+    }
+    return uses ? texts : null;
+  }
+
+  private propertyOf(expression: ts.Expression, key: string): ts.Expression | undefined {
+    const base = this.localValue(expression);
+    const declared = this.statics.get(`${base.getText()}.${key}`);
+    if (declared) return declared;
+    if (ts.isArrayLiteralExpression(base)) {
+      const item = base.elements[Number(key)];
+      return item && !ts.isSpreadElement(item) ? item : undefined;
+    }
+    if (!ts.isObjectLiteralExpression(base)) return undefined;
+    const property = base.properties.find((item) => item.name && (ts.isIdentifier(item.name) || ts.isStringLiteralLike(item.name) || ts.isNumericLiteral(item.name)) && item.name.text === key);
+    return property && ts.isPropertyAssignment(property) ? property.initializer : undefined;
+  }
+
   /** Verdadeiro/falso quando o código comprova; `undefined` quando só o runtime sabe. */
   private truthiness(expression: ts.Expression): boolean | undefined {
     if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) {
@@ -376,6 +537,8 @@ export class AngularProjectIndexer {
     const key = ts.isPropertyAccessExpression(node) ? node.name.text
       : argument && (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) ? argument.text : undefined;
     if (key === undefined) return undefined;
+    const stable = this.stableMember(node);
+    if (stable) return this.localValue(stable);
     const declared = ts.isIdentifier(node.expression) ? this.statics.get(`${node.expression.text}.${key}`) : undefined;
     if (declared) return this.localValue(declared);
     const base = this.localValue(node.expression);
@@ -387,6 +550,19 @@ export class AngularProjectIndexer {
     const property = base.properties.find((item) => item.name && (ts.isIdentifier(item.name) || ts.isStringLiteralLike(item.name) || ts.isNumericLiteral(item.name)) && item.name.text === key);
     if (property && ts.isPropertyAssignment(property)) return this.localValue(property.initializer);
     return property && ts.isShorthandPropertyAssignment(property) ? this.localValue(property.name) : undefined;
+  }
+
+  /** `this.a.b` cujo membro só tem o inicializador: nenhum outro ponto da classe o altera. */
+  private stableMember(node: ts.Expression): ts.Expression | undefined {
+    const member = this.memberPath(node, false);
+    let owner: ts.Node | undefined = node.parent;
+    while (owner && !ts.isClassLike(owner)) owner = owner.parent;
+    if (!member || !owner) return undefined;
+    const declaration = (owner as ts.ClassLikeDeclaration).members.find((item) => item.name?.getText() === member.root);
+    if (!declaration || !ts.isPropertyDeclaration(declaration) || !declaration.initializer || ts.getDecorators(declaration)?.length) return undefined;
+    const { values, mutated } = this.memberAssignments(owner as ts.ClassLikeDeclaration, member.root);
+    if (mutated || values.length) return undefined;
+    return member.path.reduce<ts.Expression | undefined>((current, key) => current && this.propertyOf(current, key), declaration.initializer);
   }
 
   /** Retorno de `this.auxiliar(args)` quando o corpo é sequencial e cada condição é comprovada; senão, só o runtime sabe. */
@@ -815,6 +991,7 @@ export class AngularProjectIndexer {
     }
 
     const routedComponents = new Set<string>();
+    const shellComponents = new Set<string>();
     const ambiguousRoutes: { file: string; className: string; line: number }[] = [];
     const opens = new Map<string, Set<string>>();
     const rawServiceOpens = new Map<string, Map<string, Set<string>>>();
@@ -830,10 +1007,11 @@ export class AngularProjectIndexer {
       const surfaceFactories = surfaceFactoryNames(source);
       const resolveComponent = (className: string, moduleSpecifier?: string): ClassRecord | null =>
         this.resolveClass({ file, className, ...(moduleSpecifier ? { moduleSpecifier } : {}) }, 'component', sourceFiles, recordsByName, recordsByFile);
-      const addRoute = (className: string, at: ts.Node, moduleSpecifier?: string): void => {
+      const addRoute = (className: string, at: ts.Node, moduleSpecifier?: string, shell = false): void => {
         const target = resolveComponent(className, moduleSpecifier);
         if (target) {
           routedComponents.add(target.key);
+          if (shell) shellComponents.add(target.key);
           return;
         }
         const candidates = (recordsByName.get(className) ?? []).filter((record) => record.kind === 'component');
@@ -869,13 +1047,21 @@ export class AngularProjectIndexer {
           const loadComponent = property('loadComponent');
           const isRoute = properties.some((item) => item.name.getText() === 'path') && (component !== undefined || loadComponent !== undefined);
           if (isRoute) {
+            const children = property('children');
+            // Com filho de caminho vazio a navegação sempre desce: o runtime emite o screen_view do filho, nunca o da casca.
+            const shell = !!children && ts.isArrayLiteralExpression(children) && children.elements.some((child) => {
+              if (!ts.isObjectLiteralExpression(child)) return false;
+              const fields = child.properties.filter(ts.isPropertyAssignment);
+              const isEmptyPath = fields.some((field) => field.name.getText() === 'path' && ts.isStringLiteralLike(field.initializer) && field.initializer.text === '');
+              return isEmptyPath && fields.some((field) => ['redirectTo', 'component', 'loadComponent'].includes(field.name.getText()));
+            });
             if (component && ts.isIdentifier(component)) {
-              addRoute(component.text, component);
+              addRoute(component.text, component, undefined, shell);
             }
             if (loadComponent) {
               const moduleSpecifier = this.dynamicImportSpecifier(loadComponent);
               for (const className of this.propertyNames(loadComponent)) {
-                addRoute(className, loadComponent, moduleSpecifier ?? undefined);
+                addRoute(className, loadComponent, moduleSpecifier ?? undefined, shell);
               }
             }
           } else if (component && ts.isIdentifier(component) && owner) {
@@ -999,7 +1185,17 @@ export class AngularProjectIndexer {
     }
     const variants = this.overlayVariants(pendingOverlays, methodCalls, components, services);
     overlaySites.splice(0, overlaySites.length, ...overlaySites.map((site) => variants.get(site.componentKey)?.length ? { ...site, variantes: variants.get(site.componentKey)! } : site));
-    return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
+    const declaration = (key: string): ts.ClassDeclaration | undefined => {
+      const separator = key.lastIndexOf('#');
+      return recordsByFile.get(key.slice(0, separator))?.get(key.slice(separator + 1))?.declaration;
+    };
+    this.templateContext = { components, declaration, external: new Set([...routedComponents, ...overlayComponents.keys()]),
+      createdByCode: (className) => [...sourceFiles.values()].some((source) => source.text.includes(`createComponent(${className}`)) };
+    const displayTexts = (key: string, expression: string): readonly string[] | null => {
+      const owner = declaration(key);
+      return owner ? this.templateTexts(owner, expression) : null;
+    };
+    return { components, routedComponents, shellComponents, displayTexts, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
       dynamicMethodValues, eagerServices };
   }
 

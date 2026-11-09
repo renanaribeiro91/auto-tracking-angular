@@ -18,6 +18,7 @@ export const MODULE_WORKSHEET_COLUMNS: readonly {
   { label: 'Tela', key: 'tela', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Categoria', key: 'categoria', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Rótulo', key: 'rotulo', minimumWidth: 9, maximumWidth: 90 },
+  { label: 'Tab bar', key: 'tabBar', minimumWidth: 10, maximumWidth: 40 },
   { label: 'Opção selecionada', key: 'opcaoSelecionada', minimumWidth: 18, maximumWidth: 90 },
   { label: 'Origem no código', key: 'origem', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Arquivo', key: 'arquivo', minimumWidth: 9, maximumWidth: 200 },

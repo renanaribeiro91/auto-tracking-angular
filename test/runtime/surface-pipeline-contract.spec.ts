@@ -63,7 +63,7 @@ it('pareia a superfície TS gerada com o evento real do DOM e reconcilia mudanç
       const entry = report.entries.find((item: { id: string }) => item.id === id);
       expect(entry.telas).toEqual([`${screen.funcionalidade}:${screen.tela}`]);
       expect(events[index]).toMatchObject({ name: entry.evento, params: {
-        rotulo: entry.rotulo, elemento: entry.elemento, funcionalidade: screen.funcionalidade,
+        rotulo: entry.eventos[0].rotulo, elemento: entry.eventos[0].elemento, funcionalidade: screen.funcionalidade,
         tela: `app-x:produto:${screenPath(screen.funcionalidade, screen.tela)}`, categoria: `app-x:produto:${screenPath(screen.funcionalidade, screen.tela)}`,
       } });
     }

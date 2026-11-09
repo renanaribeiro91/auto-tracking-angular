@@ -142,6 +142,48 @@ describe('tagger: toda interação declarada no template', () => {
     });
   });
 
+  it('texto comprovado vira rótulo fixo; mais de um valor vira lista; sem prova segue marcador', () => {
+    const tagged = (html: string, known: Record<string, readonly string[]>) => tagTemplate(html, ctx({ mode: 'ref', displayTexts: (expression) => known[expression] ?? null })).entries[0]!;
+    expect(tagged(`<button (click)="ir()"><span>{{ textos.BOTAO }}</span></button>`, { 'textos.BOTAO': ['Ok, entendi'] })).toMatchObject({ rotulo: 'ok-entendi' });
+    expect(tagged(`<button (click)="ir()">{{ rotulo }}</button>`, { rotulo: ['Salvar', 'Voltar'] })).toMatchObject({ rotulos: ['salvar', 'voltar'] });
+    expect(tagged(`<button (click)="ir()">{{ textos.BOTAO }}</button>`, {})).toMatchObject({ rotulo: '[rotulo-do-botao-exibido]' });
+    expect(tagged(`<ng-container *ngFor="let item of itens"><button (click)="ir(item)">{{ item }}</button></ng-container>`, { item: ['Falso'] }).rotulo).not.toBe('falso');
+  });
+
+  it('card com vários textos é nomeado pela ação; um único texto dinâmico segue lido da tela', () => {
+    expect(tagTemplate(`<div (click)="editarDados()"><p>{{ nome }}</p><p>{{ valor }}</p></div>`, ctx({ mode: 'ref' })).entries[0]!.rotulo).toBe('editar-dados');
+    expect(tagTemplate(`<button (click)="ir()">{{ apiTexto }}</button>`, ctx({ mode: 'ref' })).entries[0]!.rotulo).toBe('[rotulo-do-botao-exibido]');
+  });
+
+  it('identificador de teste ligado não esconde o texto real', () => {
+    const entry = tagTemplate(`<button [attr.aria-label]="ids.BTN" title="Salvar" (click)="ir()"></button>`, ctx({ mode: 'ref', displayTexts: (expression) => expression === 'ids.BTN' ? ['btn-salvar'] : null })).entries[0]!;
+    expect(entry.rotulo).toBe('salvar');
+  });
+
+  it('formulário usa o texto do botão de envio e método em inglês vira o verbo do negócio', () => {
+    expect(tagTemplate(`<form (ngSubmit)="emitirEntrar()"><button type="submit">Entrar</button></form>`, ctx({ mode: 'ref' })).entries[0]!.rotulo).toBe('entrar');
+    expect(tagTemplate(`<ion-icon (click)="openFiltro()"></ion-icon>`, ctx({ mode: 'ref' })).entries[0]!.rotulo).toBe('abrir-filtro');
+    expect(tagTemplate(`<ion-icon (click)="toggleChange()"></ion-icon>`, ctx({ mode: 'ref' })).entries[0]!.rotulo).toBe('alternar');
+  });
+
+  it('aba de página não é dropdown', () => {
+    expect(new TemplateTagger().elementoFor('x-tab-group', new Map(), 'selectedTabChange')).toBe('aba');
+    expect(new TemplateTagger().elementoFor('x-tab-botao', new Map(), 'abaClick')).toBe('aba');
+  });
+
+  it('clique de tab bar é tab-bar e leva o nome exibido da aba', () => {
+    const tab = def({ selectors: ['x-tab-bar'], outputs: new Map([['onClick', 'onClick']]), template: `<button (click)="onClick.emit()">x</button>` });
+    const r = tagTemplate(`<x-tab-bar tabTitle="Clube mais Saúde" (onClick)="ir()"></x-tab-bar>`, ctx({ mode: 'ref', catalog: { get: (tag) => (tag === 'x-tab-bar' ? tab : catalog.get(tag)) } }));
+    expect(r.entries).toEqual([expect.objectContaining({ elemento: 'tab-bar', rotulo: 'clube-mais-saude', tab_bar: 'Clube mais Saúde' })]);
+  });
+
+  it('saída cujo gesto já pertence a outra saída nunca dispara e fica fora da evidência', () => {
+    const select = def({ selectors: ['x-sel'], outputs: new Map([['aberto', 'aberto'], ['fechado', 'fechado']]), template: `<button (click)="aberto.emit(); fechado.emit()">x</button>` });
+    const r = tagTemplate(`<x-sel (aberto)="abrir()" (fechado)="fechar()"></x-sel>`, ctx({ mode: 'ref', catalog: { get: (tag) => (tag === 'x-sel' ? select : catalog.get(tag)) } }));
+    expect(r.entries.map((item) => item.origem)).toEqual(['(aberto) em <x-sel>']);
+    expect(decodeTrackingToken(r.entries[0]!.ref!)?.outputs?.map((item) => item.output)).toEqual(['aberto']);
+  });
+
   it('componente tagueado ausente das dependências instaladas mantém a marcação e avisa', () => {
     const ref = encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'home', tela: 'home',
       outputs: [{ id: 'home-inicio', event: 'click', selector: 'ion-tab-button', label: 'inicio', output: 'onClick', elemento: 'filtro' }] });
@@ -553,13 +595,13 @@ describe('tagger: toda interação declarada no template', () => {
     expect(second.entries).toEqual(first.entries);
   });
 
-  it('duas saídas comprovadas pelo mesmo gesto mantêm ids distintos e estáveis', () => {
+  it('duas saídas do mesmo gesto listam só a que o runtime envia, com id estável', () => {
     const agenda = def({ selectors: ['x-agenda'], outputs: new Map([['voltar', 'voltar'], ['abrirInfo', 'abrirInfo']]), template: '<button (click)="voltar.emit(); abrirInfo.emit()">Ações</button>' });
     const agendaCatalog: ComponentCatalog = { get: (tag) => tag === 'x-agenda' ? agenda : catalog.get(tag) };
     const html = '<x-agenda (voltar)="voltar()" (abrirInfo)="info()"></x-agenda>';
     const first = tagTemplate(html, ctx({ catalog: agendaCatalog }));
     const second = tagTemplate(first.html, ctx({ catalog: agendaCatalog, usedIds: new Set(first.entries.map((e) => e.id)) }));
-    expect(first.entries.map((e) => e.id)).toEqual(['reembolso-tipo-documento-voltar', 'reembolso-tipo-documento-info']);
+    expect(first.entries.map((e) => e.id)).toEqual(['reembolso-tipo-documento-voltar']);
     expect(second.html).toBe(first.html);
     expect(second.entries.map((e) => e.id)).toEqual(first.entries.map((e) => e.id));
   });

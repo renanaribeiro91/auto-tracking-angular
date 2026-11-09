@@ -95,6 +95,10 @@ export interface ProjectIndex {
   readonly components: readonly ComponentInfo[];
   /** Identidades de componentes usados em rotas, sem colisões por nome de classe. */
   readonly routedComponents: ReadonlySet<string>;
+  /** Textos que o código comprova para uma expressão do template do componente; `null` se algum caminho só existe em runtime. */
+  readonly displayTexts?: (componentKey: string, expression: string) => readonly string[] | null;
+  /** Rotas-casca: sempre descem para um filho, logo não emitem screen_view próprio. */
+  readonly shellComponents?: ReadonlySet<string>;
   /** Rotas sem importação resolvível cujo nome aponta para mais de uma declaração. */
   readonly ambiguousRoutes: readonly { readonly file: string; readonly className: string; readonly line: number }[];
   /** identidade do componente que abre → identidades dos componentes abertos. */

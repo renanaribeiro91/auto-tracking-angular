@@ -46,8 +46,8 @@ export class TipoPage { constructor(private modal: ModalService) {} abrir() { th
     // O relatório usa a mesma estrutura pública de TagEntry dos templates.
     expect(entries).toBeDefined();
     const entry = entries.find((item: { id: string }) => item.id === 'indisponibilidade-fechar');
-    expect(entry).toMatchObject({ rotulo: 'fechar-indisponibilidade', elemento: 'botao', telas: ['reembolso:tipo'] });
-    expect(decodeTrackingToken(entry.ref)?.outputs?.[0]).toMatchObject({ id: entry.id, label: entry.rotulo, selector: '#fechar' });
+    expect(entry).toMatchObject({ telas: ['reembolso:tipo'], eventos: [expect.objectContaining({ rotulo: 'fechar-indisponibilidade', elemento: 'botao' })] });
+    expect(decodeTrackingToken(entry.ref)?.outputs?.[0]).toMatchObject({ id: entry.id, label: entry.eventos[0].rotulo, selector: '#fechar' });
     const change = result.changes.find((item) => item.file.endsWith('modal.service.ts'))!;
     expect(change.after).toContain('ref: "v1.');
     for (const item of result.changes) fs.writeFileSync(item.file, item.after);

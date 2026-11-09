@@ -56,6 +56,12 @@ export const COMPOUND_LABEL_INPUT = /^(?!header|cabecalho|sub|ok|cancel|confirm|
 /** Os mesmos atributos na forma ligada (`[attr.x]`/`[x]`). */
 export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMap((name) => [`[attr.${name}]`, `[${name}]`]);
 
+/** Verbo de método em inglês na forma que o negócio lê no rótulo. */
+export const ACTION_VERBS: ReadonlyMap<string, string> = new Map([
+  ['open', 'abrir'], ['close', 'fechar'], ['change', 'alterar'], ['select', 'selecionar'], ['toggle', 'alternar'], ['show', 'mostrar'], ['hide', 'ocultar'],
+  ['add', 'adicionar'], ['remove', 'remover'], ['delete', 'excluir'], ['edit', 'editar'], ['save', 'salvar'], ['send', 'enviar'], ['submit', 'enviar'], ['search', 'buscar'],
+]);
+
 /** Nome que só repete o tipo do controle (`clickLink` → `link`) não descreve a ação. */
 export const GENERIC_ELEMENT_LABEL = /^(?:link|botao|button|item|card|elemento|opcao|option|acao|action)$/;
 

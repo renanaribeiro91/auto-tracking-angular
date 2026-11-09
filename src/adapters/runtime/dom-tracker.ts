@@ -10,7 +10,7 @@ import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
 import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
-import { screenPath } from '../../domain/contract/screen-binding.js';
+import { screenPath, subfuncionalidadeOf } from '../../domain/contract/screen-binding.js';
 
 export interface DomTrackerDeps {
   /** Host Angular opcional; limita a varredura inicial sem restringir overlays. */
@@ -860,7 +860,7 @@ export class DomEventTracker {
   }
 
   static baseParams(screen: Screen, environment: string, product: string): Params {
-    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, ...(screen.tela !== screen.funcionalidade ? { subfuncionalidade: screen.tela } : {}),
+    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, ...(subfuncionalidadeOf(screen.funcionalidade, screen.tela) ? { subfuncionalidade: screen.tela } : {}),
       tela: `${environment}:${product}:${screenPath(screen.funcionalidade, screen.tela)}` };
   }
 }
