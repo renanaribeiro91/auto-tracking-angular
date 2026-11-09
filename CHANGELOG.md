@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.5 — 2026-11-09
+
+- Texto de modal, alerta e menu passado por parâmetro, constante, arquivo de mensagens ou método auxiliar aparece com o nome real na planilha, nas telas de cada chamada; marcador fica só para o que é conhecido apenas em runtime.
+- Componente de biblioteca sem título usa o cabeçalho ou o próprio nome, igual ao runtime.
+- A planilha ganha as colunas Funcionalidade e Ambiente; `screen_view` deixa de mostrar Ação, parâmetro que esse evento não envia.
+
 ## 2.3.4 — 2026-11-09
 
 - Cliques de modal, alerta e menu abertos por código entram no relatório e na planilha, com o mesmo rótulo enviado em runtime: texto real dos botões declarados na abertura e dos gestos do componente de biblioteca apresentado; o que só existe em runtime aparece com marcador.
