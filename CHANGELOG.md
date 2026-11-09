@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.6 — 2026-11-09
+
+- `subfuncionalidade` só é enviada e preenchida na planilha quando a tela é um submódulo; na tela raiz do módulo não vai nada.
+
 ## 2.3.5 — 2026-11-09
 
 - Texto de modal, alerta e menu passado por parâmetro, constante, arquivo de mensagens ou método auxiliar aparece com o nome real na planilha, nas telas de cada chamada; marcador fica só para o que é conhecido apenas em runtime.
