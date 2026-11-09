@@ -151,9 +151,17 @@ export class EvidenceWorkbookWriter {
         });
       }
     }
-    return rows.sort(
+    rows.sort(
       (a, b) => a.modulo.localeCompare(b.modulo) || a.tela.localeCompare(b.tela) || b.evento.localeCompare(a.evento) || a.id.localeCompare(b.id),
     );
+    // Uma linha por evento que chega ao Firebase; todos os pontos do código continuam no relatorio.json.
+    const distinct = new Map<string, Row>();
+    for (const row of rows) {
+      // Sem tela resolvida não há como afirmar que é o mesmo evento.
+      const key = JSON.stringify([row.modulo, row.tela, row.evento, row.acao, row.elemento, row.rotulo, row.opcaoSelecionada, row.tela.includes('{tela-de-origem}') ? row.id : '']);
+      if (!distinct.has(key)) distinct.set(key, row);
+    }
+    return [...distinct.values()];
   }
 
   private titleCase(value: string): string {

@@ -40,7 +40,7 @@ describe('overlay criado por código sem marcação', () => {
       document.querySelector('i')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await flush();
       expect(sent.map((event) => [event.params['elemento'], event.params['rotulo']])).toEqual([
-        ['modal', 'ok-desculpe'], ['modal', 'botao-fechar-da-modal-desculpe']]);
+        ['modal', 'ok-desculpe'], ['modal', 'fechar-desculpe']]);
     } finally { stop(); }
   });
 

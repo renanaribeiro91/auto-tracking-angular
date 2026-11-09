@@ -16,6 +16,15 @@ export function slug(value: string | null | undefined, max = 60): string {
     .replace(/-+$/g, '');
 }
 
+/**
+ * Rótulo do clique em overlay sem marcação (CLI e runtime): a ação sozinha ("ok") não diz de qual overlay veio,
+ * então leva o contexto (título ou tipo), sem repeti-lo; "botão" e "da modal" do texto acessível são ruído.
+ */
+export function overlayActionLabel(action: string, context: string): string {
+  const gesture = action.replace(/^botao-/, '').replace(/-d[ao]-(?:modal|alerta|menu|popover|janela)$/, '');
+  return context && !gesture.includes(context) ? slug(`${gesture}-${context}`, MAX_PROVEN_LABEL) : gesture;
+}
+
 /** Palavras técnicas do seletor de um componente apresentado como overlay (não o nomeiam). */
 const OVERLAY_TECHNICAL_WORDS = new Set(['modal', 'component', 'page', 'popover', 'dialog', 'alert', 'sheet', 'bottom', 'overlay']);
 

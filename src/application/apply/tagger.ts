@@ -2,7 +2,7 @@
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
 import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
-import { labelSlug, slug } from '../../domain/contract/slug.js';
+import { labelSlug, MAX_PROVEN_LABEL, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
 import { encodeTrackingToken } from '../../domain/contract/tracking-token-encoder.js';
@@ -807,10 +807,13 @@ export class TemplateTagger {
           const ownLabel = navigation ? '' : label;
           const dynamicLabel = !!dynamicSource && !navigation;
           const name = this.shortName(slug(ownLabel) || this.actionName(handler, expr, this.testId(attrs), this.withoutTagPrefix(output, tag))) || this.elementoFor(tag, attrs, output);
-          const rotulo = slug(ownLabel) || name;
-          const solePriorOutput = previous?.length === 1 && !prior?.click ? previous[0] : undefined;
           const activeOutputs = [...attrs.keys()].filter((attribute) => /^\(([\w.$]+)\)$/.test(attribute) &&
             !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
+          // Ações distintas do mesmo componente (ver, excluir) não podem chegar iguais ao Firebase.
+          const verb = activeOutputs.length > 1 && ownLabel && !dynamicLabel && !rotulos.length
+            ? slug(this.words(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action|on|handle)-/, '').replace(/^click$/, '')) : '';
+          const rotulo = verb && !slug(ownLabel).includes(verb) ? slug(`${verb}-${ownLabel}`, MAX_PROVEN_LABEL) : slug(ownLabel) || name;
+          const solePriorOutput = previous?.length === 1 && !prior?.click ? previous[0] : undefined;
           const migratedId = !known.has(output) && activeOutputs.length === 1 &&
             solePriorOutput?.label === rotulo ? solePriorOutput.id : undefined;
           const id = this.claimId(known.get(output) ?? migratedId, `${prefix}-${name}`, ctx, claimed);

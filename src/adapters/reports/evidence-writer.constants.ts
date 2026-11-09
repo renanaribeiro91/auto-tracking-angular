@@ -1,5 +1,5 @@
 /** Versão do layout serializado; deve mudar quando o workbook gerado mudar. */
-export const EVIDENCE_WRITER_VERSION = '32';
+export const EVIDENCE_WRITER_VERSION = '33';
 
 /** Paleta neutra padrão da planilha de evidência. */
 export const WORKBOOK_COLORS = {

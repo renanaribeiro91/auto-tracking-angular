@@ -65,6 +65,16 @@ export interface OverlaySite {
   readonly elemento: string;
   /** Título literal da chamada; ausente quando só é conhecido em runtime. */
   readonly titulo?: string;
+  /** A chamada comprovadamente não define título: em runtime o contexto é o tipo do overlay. */
+  readonly semTitulo?: boolean;
+  /** Textos dos botões declarados na abertura (`null` = só conhecido em runtime); ausente se a abertura não os define. */
+  readonly botoes?: readonly (string | null)[];
+  /** Propriedades de onde `botoes` foi lido. */
+  readonly listas?: readonly string[];
+  /** Classe do componente de biblioteca apresentado. */
+  readonly componente?: string;
+  /** Opções conhecidas: literal de texto, `false` ou `true` (presente com outro valor). Ausente se não forem conhecidas. */
+  readonly props?: ReadonlyMap<string, string | boolean>;
   readonly origem: string;
   readonly file: string;
   readonly line: number;

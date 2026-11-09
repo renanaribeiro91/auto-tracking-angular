@@ -736,4 +736,17 @@ describe('tagger: título do host como rótulo', () => {
     expect(token.rotuloDinamico).toBeUndefined();
     expect(result.entries[0]).toMatchObject({ rotulo: 'voltar' });
   });
+
+  it('ações distintas do mesmo componente levam o verbo no rótulo; repetir o texto não duplica', () => {
+    const acoes = def({
+      selectors: ['lib-arquivo'], outputs: new Map([['acaoVisualizar', 'acaoVisualizar'], ['acaoDeletarTodos', 'acaoDeletarTodos']]),
+      template: '<button class="ver" (click)="this.acaoVisualizar.emit()">A</button><button class="del" (click)="this.acaoDeletarTodos.emit()">B</button>',
+    });
+    const c: ComponentCatalog = { get: (tag) => tag === 'lib-arquivo' ? acoes : catalog.get(tag) };
+    const multi = tagTemplate('<lib-arquivo title="Arquivo anexado" (acaoVisualizar)="v()" (acaoDeletarTodos)="d()"></lib-arquivo>', ctx({ catalog: c }));
+    expect(multi.entries.map((entry) => entry.rotulo)).toEqual(['visualizar-arquivo-anexado', 'deletar-todos-arquivo-anexado']);
+    expect(multi.html).toContain('visualizar-arquivo-anexado');
+    const sole = tagTemplate('<lib-arquivo title="Arquivo anexado" (acaoVisualizar)="v()"></lib-arquivo>', ctx({ catalog: c }));
+    expect(sole.entries.map((entry) => entry.rotulo)).toEqual(['arquivo-anexado']);
+  });
 });

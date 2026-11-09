@@ -80,10 +80,11 @@ export class AngularComponentCatalogBuilder {
   }
 
 /** Componentes de uma biblioteca APF: chamadas ɵɵngDeclareComponent com selector, inputs, outputs, template e host */
-  private readPackageComponents(file: string, source: string, usedTags: ReadonlySet<string>): ComponentDef[] {
+  private readPackageComponents(file: string, source: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[]): ComponentDef[] {
     const text = fs.readFileSync(file, 'utf-8');
     // parse (caro) só de arquivos que declaram algum seletor usado nos templates do projeto
-    if (!text.includes('ngDeclareComponent') || ![...usedTags].some((tag) => new RegExp(`['\"]${tag}['\"]`).test(text))) return [];
+    if (!text.includes('ngDeclareComponent') || (![...usedTags].some((tag) => new RegExp(`['\"]${tag}['\"]`).test(text))
+      && !overlayClasses.some((name) => text.includes(`class ${name}`)))) return [];
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     const classes = new Map<string, ts.ClassLikeDeclaration>();
     const declares = new Map<string, ts.ObjectLiteralExpression>();
@@ -111,6 +112,7 @@ export class AngularComponentCatalogBuilder {
       const inputs = new Set<string>();
       const methods = new Map<string, string>();
       const hostListeners: { event: string; expr: string }[] = [];
+      const truthyInputs = new Set<string>();
       const type = p.get('type');
       const typeName = type && ts.isIdentifier(type) ? type.text : null;
       for (const className of typeName ? this.inheritedClassNames(typeName, classes) : []) {
@@ -122,7 +124,10 @@ export class AngularComponentCatalogBuilder {
           hostListeners.push({ event, expr: this.literalText(expr) ?? '' });
         }
         const inheritedClass = classes.get(className);
-        if (inheritedClass) for (const [method, body] of this.classMethods(inheritedClass)) methods.set(method, body);
+        if (inheritedClass) {
+          for (const [method, body] of this.classMethods(inheritedClass)) methods.set(method, body);
+          for (const input of this.truthyInitializers(inheritedClass)) truthyInputs.add(input);
+        }
       }
       defs.push({
         selectors,
@@ -132,9 +137,29 @@ export class AngularComponentCatalogBuilder {
         template: this.literalText(p.get('template')) ?? '',
         methods,
         hostListeners,
+        ...(typeName ? { className: typeName } : {}),
+        truthyInputs,
       });
     }
     return defs;
+  }
+
+  /** Propriedades com valor inicial verdadeiro (campo ou atribuição direta no construtor). */
+  private truthyInitializers(node: ts.ClassLikeDeclaration): string[] {
+    const truthy = (value: ts.Expression): boolean => value.kind !== ts.SyntaxKind.FalseKeyword && value.kind !== ts.SyntaxKind.NullKeyword
+      && value.getText() !== 'undefined' && value.getText() !== '0' && !(ts.isStringLiteralLike(value) && !value.text);
+    const names: string[] = [];
+    for (const member of node.members) {
+      if (ts.isPropertyDeclaration(member) && member.initializer && ts.isIdentifier(member.name) && truthy(member.initializer)) names.push(member.name.text);
+      if (!ts.isConstructorDeclaration(member) || !member.body) continue;
+      for (const statement of member.body.statements) {
+        if (!ts.isExpressionStatement(statement) || !ts.isBinaryExpression(statement.expression)) continue;
+        const { left, operatorToken, right } = statement.expression;
+        if (operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(left)
+          && left.expression.kind === ts.SyntaxKind.ThisKeyword && truthy(right)) names.push(left.name.text);
+      }
+    }
+    return names;
   }
 
 /** CustomEvents de componentes Stencil são publicados no próprio host e atravessam Shadow DOM. */
@@ -163,7 +188,7 @@ export class AngularComponentCatalogBuilder {
   }
 
   /** Percorre dependências de runtime e peers instalados, inclusive transitivos e pacotes APF/Stencil. */
-  private readDependencyComponents(consumerRoot: string, usedTags: ReadonlySet<string>): ComponentDef[] {
+  private readDependencyComponents(consumerRoot: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[]): ComponentDef[] {
     const manifest = path.join(consumerRoot, 'package.json');
     if (!fs.existsSync(manifest)) return [];
     type PackageManifest = {
@@ -211,7 +236,7 @@ export class AngularComponentCatalogBuilder {
       if (pkg.module && !path.isAbsolute(pkg.module) && !pkg.module.split(/[\\/]/).includes('..')) bundles.add(path.join(dir, pkg.module));
       for (const bundle of bundles) {
         if (fs.existsSync(bundle) && fs.statSync(bundle).isFile()) {
-          defs.push(...this.readPackageComponents(bundle, name, usedTags));
+          defs.push(...this.readPackageComponents(bundle, name, usedTags, overlayClasses));
         }
       }
 
@@ -224,15 +249,18 @@ export class AngularComponentCatalogBuilder {
     return defs;
   }
 
-  buildCatalog(consumerRoot: string, projectDefs: readonly ComponentDef[]): ComponentCatalog {
+  buildCatalog(consumerRoot: string, projectDefs: readonly ComponentDef[], overlayClasses: readonly string[] = []): ComponentCatalog {
     const usedTags = new Set<string>();
     for (const d of projectDefs) for (const m of d.template.matchAll(/<([a-z][\w]*-[\w-]*)/gi)) usedTags.add(m[1]!.toLowerCase());
     const byTag = new Map<string, ComponentDef[]>();
     // Um mesmo seletor pode ter implementações em módulos diferentes. Não perder produtores distintos.
-    for (const def of [...this.readDependencyComponents(consumerRoot, usedTags), ...projectDefs]) {
+    const byClass = new Map<string, ComponentDef>();
+    for (const def of [...this.readDependencyComponents(consumerRoot, usedTags, overlayClasses), ...projectDefs]) {
       for (const selector of def.selectors) byTag.set(selector, [...(byTag.get(selector) ?? []), def]);
+      if (def.className) byClass.set(def.className, def);
     }
     return {
+      ofClass: (className) => byClass.get(className),
       get: (tag, output) => {
         const candidates = byTag.get(tag.toLowerCase()) ?? [];
         if (!output) return candidates[candidates.length - 1];

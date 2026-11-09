@@ -17,3 +17,7 @@ export const OVERLAY_API = /(modal|dialog|popover|sheet)/i;
 export const OVERLAY_CONTROLLER = /(alert|action.?sheet|modal|popover|dialog|sheet)/i;
 /** Onde a API de overlay recebe o título: raiz da chamada, `componentProps` (Ionic) ou `data` (Material). */
 export const OVERLAY_TITLE_PROPERTIES: ReadonlySet<string> = new Set(['header', 'title', 'titulo']);
+/** Opção que lista os gestos do overlay (`buttons`, `botoes`, `actions`, com ou sem prefixo). */
+export const OVERLAY_BUTTON_LIST = /(?:buttons?|botoes|botões|actions?|acoes|ações)$/i;
+/** Onde cada item da lista guarda o texto exibido. */
+export const OVERLAY_BUTTON_TEXT = ['text', 'title', 'titulo', 'label', 'texto', 'rotulo'] as const;

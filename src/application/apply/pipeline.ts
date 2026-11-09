@@ -7,12 +7,13 @@ import { ComponentScreenResolver } from './component-screen-resolver.js';
 import type { ComponentInfo, ProjectIndex } from './ports/project-index.js';
 import { ScreenIdentityResolver } from './screen-identity-resolver.js';
 import { ENGINE_VERSION } from './constants.js';
+import { overlayGestures } from './overlay-gestures.js';
 import { tagSurface, untagSurface } from './surface-tagger.js';
 import { resolveProductionUsage } from './production-usage.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
-import { labelSlug, overlayComponentName, slug } from '../../domain/contract/slug.js';
+import { labelSlug, overlayActionLabel, overlayComponentName, slug } from '../../domain/contract/slug.js';
 import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
@@ -78,6 +79,8 @@ export class TrackingPipeline {
     const changes: PlannedChange[] = [];
     const entries: TagEntry[] = [];
     const diagnostics: TagDiagnostic[] = [];
+    /** Cliques de overlay sem template no projeto: não há onde gravar token, o contrato é o do runtime. */
+    const runtimeContract = new Set<string>();
     let templates = 0;
     const claimedIds = new Set<string>();
 
@@ -106,7 +109,8 @@ export class TrackingPipeline {
           mensagem: `a rota '${route.className}' corresponde a mais de um componente; importe a declaração correta para marcar a tela com segurança`,
         });
       }
-      const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, index.components.map((c) => c.def));
+      const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, index.components.map((c) => c.def),
+        (index.overlaySites ?? []).flatMap((site) => site.componente ?? []));
       // identidade de analytics única por tela: refina só as telas que colidiriam com outra
       const refineOf = new Map<ComponentInfo, 1 | 2 | 3>();
       const routedComponents = index.components.filter((component) => index.routedComponents.has(component.key));
@@ -223,13 +227,29 @@ export class TrackingPipeline {
         const component = index.components.find((item) => item.key === site.componentKey)!;
         const resolved = screensOf(component);
         const rotulo = site.titulo ? labelSlug(site.titulo) : `[titulo-do-${site.elemento}-exibido]`;
-        const base = `${slug(component.className.replace(/([a-z0-9])([A-Z])/g, '$1-$2'), 120)}-visualizacao`;
-        let id = base;
-        for (let n = 2; usedIds.has(id); n++) id = `${base}-${n}`;
-        usedIds.add(id);
-        entries.push({ id, owner: config.owner, evento: 'visualizacao', acao: 'visualizacao', elemento: site.elemento, rotulo, origem: site.origem,
-          ...identity(component), telas: resolved.length ? resolved : [ORIGIN_SCREEN], vinculo_tela: 'origem',
-          arquivo: this.relativePath(consumerRoot, site.file), linha: site.line });
+        const name = slug(component.className.replace(/([a-z0-9])([A-Z])/g, '$1-$2'), 120);
+        const uniqueId = (base: string): string => {
+          let id = base;
+          for (let n = 2; usedIds.has(id); n++) id = `${base}-${n}`;
+          usedIds.add(id);
+          return id;
+        };
+        const row = { owner: config.owner, elemento: site.elemento, origem: site.origem, ...identity(component),
+          telas: resolved.length ? resolved : [ORIGIN_SCREEN], vinculo_tela: 'origem' as const,
+          arquivo: this.relativePath(consumerRoot, site.file), linha: site.line };
+        entries.push({ ...row, id: uniqueId(`${name}-visualizacao`), evento: 'visualizacao', acao: 'visualizacao', rotulo });
+        // Mesmo rótulo que o runtime envia; o que só existe em runtime aparece como marcador, nunca some.
+        const context = site.titulo ? labelSlug(site.titulo) : site.semTitulo ? site.elemento : `[titulo-do-${site.elemento}-exibido]`;
+        const clicks = new Map(overlayGestures(site, site.componente ? catalog.ofClass?.(site.componente) : undefined).map((text) => {
+          const action = text === null ? '' : labelSlug(text);
+          const known = action && !context.startsWith('[');
+          return [known ? overlayActionLabel(action, context) : `${action ? overlayActionLabel(action, '') : '[rotulo-do-botao-exibido]'}-${context}`, action] as const;
+        }));
+        for (const [clickLabel, action] of clicks) {
+          const id = uniqueId(`${name}-clique-${action || 'botao'}`);
+          runtimeContract.add(id);
+          entries.push({ ...row, id, evento: 'click', acao: 'clique', rotulo: clickLabel });
+        }
       }
       for (const surface of index.surfaces ?? []) {
         if (!original.has(surface.file)) {
@@ -266,7 +286,7 @@ export class TrackingPipeline {
       const validReferences = entry.telas.length && entry.telas.every((screen) =>
         screen === '*' || screen === ORIGIN_SCREEN || isStaticScreenReference(screen));
       const requiresOrigin = entry.vinculo_tela === 'origem';
-      const validContract = config.mode !== 'ref' || !requiresOrigin || (entry.evento === 'visualizacao' && !entry.ref)
+      const validContract = config.mode !== 'ref' || !requiresOrigin || (entry.evento === 'visualizacao' && !entry.ref) || runtimeContract.has(entry.id)
         || (entry.ref && decodeTrackingToken(entry.ref)?.requireOrigin === true);
       if (!validReferences || !entry.vinculo_tela || !validContract) diagnostics.push({
         code: 'TRACKING_SCREEN_BINDING_MISSING', arquivo: entry.arquivo, linha: entry.linha,

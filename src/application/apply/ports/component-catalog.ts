@@ -11,11 +11,16 @@ export interface ComponentDef {
   readonly methods: ReadonlyMap<string, string>;
   /** listeners no próprio host (@HostListener / host: { '(click)': ... }) */
   readonly hostListeners: readonly { readonly event: string; readonly expr: string }[];
+  /** Classe do componente de biblioteca. */
+  readonly className?: string;
+  /** Propriedades iniciadas com valor verdadeiro na classe. */
+  readonly truthyInputs?: ReadonlySet<string>;
 }
 
 /** Catálogo de componentes disponível durante a marcação. */
 export interface ComponentCatalog {
   get(tag: string, output?: string): ComponentDef | undefined;
+  ofClass?(className: string): ComponentDef | undefined;
 }
 
 /** Gesto DOM observável pelo runtime; `:host` representa o próprio componente. */

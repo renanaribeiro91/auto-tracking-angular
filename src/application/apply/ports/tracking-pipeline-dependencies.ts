@@ -10,7 +10,7 @@ export interface TrackingProjectIndexer {
 }
 
 export interface TrackingComponentCatalogBuilder {
-  buildCatalog(consumerRoot: string, definitions: readonly ComponentDef[]): ComponentCatalog;
+  buildCatalog(consumerRoot: string, definitions: readonly ComponentDef[], overlayClasses?: readonly string[]): ComponentCatalog;
 }
 
 export interface TrackingPipelineDependencies {

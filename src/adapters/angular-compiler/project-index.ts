@@ -7,7 +7,7 @@ import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
 import type { ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
-import { OVERLAY_API, OVERLAY_CONTROLLER, OVERLAY_TITLE_PROPERTIES, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
+import { OVERLAY_API, OVERLAY_BUTTON_LIST, OVERLAY_BUTTON_TEXT, OVERLAY_CONTROLLER, OVERLAY_TITLE_PROPERTIES, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
 export type { ComponentInfo, InlineTemplate, ProjectIndex } from '../../application/apply/ports/project-index.js';
 
 interface ClassRecord {
@@ -288,20 +288,100 @@ export class AngularProjectIndexer {
     return unique.size === 1 ? unique.values().next().value! : null;
   }
 
-  /** Título literal nas opções do overlay (`header`, `componentProps.title`, `data.titulo`). */
-  private overlayTitle(...options: readonly (ts.Expression | undefined)[]): string | undefined {
-    for (const option of options) {
-      if (!option || !ts.isObjectLiteralExpression(option)) continue;
-      for (const property of option.properties) {
-        if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) continue;
-        if (OVERLAY_TITLE_PROPERTIES.has(property.name.text) && ts.isStringLiteralLike(property.initializer)) return property.initializer.text;
-        if (['componentProps', 'data'].includes(property.name.text)) {
-          const nested = this.overlayTitle(property.initializer);
-          if (nested) return nested;
+  /** Expressão sem invólucros, seguindo `const` do método onde foi declarada. */
+  private localValue(expression: ts.Expression): ts.Expression {
+    let value = expression;
+    while (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isNonNullExpression(value)) value = value.expression;
+    if (!ts.isIdentifier(value)) return value;
+    const name = value.text;
+    for (let scope: ts.Node | undefined = value.parent; scope; scope = scope.parent) {
+      if (!ts.isFunctionLike(scope)) continue;
+      let initializer: ts.Expression | undefined;
+      const find = (node: ts.Node): void => {
+        if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const) {
+          for (const item of node.declarations) if (ts.isIdentifier(item.name) && item.name.text === name && item.initializer) initializer = item.initializer;
         }
+        if (!initializer) ts.forEachChild(node, find);
+      };
+      find(scope);
+      if (initializer) return this.localValue(initializer);
+    }
+    return value;
+  }
+
+  /** Opções do overlay achatadas (raiz da chamada, `componentProps`, `data`); `known` é falso se parte só existe em runtime. */
+  private overlayOptions(...options: readonly (ts.Expression | undefined)[]): { props: Map<string, ts.Expression>; known: boolean } {
+    const props = new Map<string, ts.Expression>();
+    let found = false;
+    let known = true;
+    for (const option of options) {
+      const value = option && this.localValue(option);
+      if (!value || !ts.isObjectLiteralExpression(value)) continue;
+      found = true;
+      for (const property of value.properties) {
+        if (ts.isShorthandPropertyAssignment(property)) { props.set(property.name.text, property.name); continue; }
+        if (!ts.isPropertyAssignment(property) || !(ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name))) { known = false; continue; }
+        if (!['componentProps', 'data'].includes(property.name.text)) { props.set(property.name.text, property.initializer); continue; }
+        const nested = this.overlayOptions(property.initializer);
+        known &&= nested.known;
+        for (const [name, item] of nested.props) props.set(name, item);
       }
     }
-    return undefined;
+    return { props, known: found && known };
+  }
+
+  private literalTexts(expression: ts.Expression): (string | null)[] {
+    const value = this.localValue(expression);
+    if (ts.isConditionalExpression(value)) return [...this.literalTexts(value.whenTrue), ...this.literalTexts(value.whenFalse)];
+    return [ts.isStringLiteralLike(value) ? value.text : null];
+  }
+
+  /** Textos de uma lista de botões, em todos os ramos que o código declara; `null` no que só existe em runtime. */
+  private overlayButtonTexts(expression: ts.Expression, accepts: (item: ts.ObjectLiteralExpression) => boolean = () => true): (string | null)[] {
+    const value = this.localValue(expression);
+    if (ts.isConditionalExpression(value)) return [...this.overlayButtonTexts(value.whenTrue, accepts), ...this.overlayButtonTexts(value.whenFalse, accepts)];
+    if (ts.isBinaryExpression(value) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(value.operatorToken.kind)) {
+      return [...this.overlayButtonTexts(value.left, accepts), ...this.overlayButtonTexts(value.right, accepts)];
+    }
+    if (ts.isIdentifier(value) && value.text === 'undefined') return [];
+    if (!ts.isArrayLiteralExpression(value)) return [null];
+    return value.elements.flatMap((element) => {
+      if (ts.isSpreadElement(element)) return this.overlayButtonTexts(element.expression, accepts);
+      const item = this.localValue(element);
+      if (!ts.isObjectLiteralExpression(item)) return this.literalTexts(item);
+      if (!accepts(item)) return [];
+      for (const key of OVERLAY_BUTTON_TEXT) {
+        const text = item.properties.find((property): property is ts.PropertyAssignment => ts.isPropertyAssignment(property) && property.name.getText() === key);
+        if (text) return this.literalTexts(text.initializer);
+      }
+      return [null];
+    });
+  }
+
+  /** O que a abertura de um overlay declara: título, botões e opções que decidem os gestos do componente apresentado. */
+  private overlayDeclaration(first: ts.Expression, second: ts.Expression | undefined): Pick<OverlaySite, 'titulo' | 'semTitulo' | 'botoes' | 'listas' | 'componente' | 'props'> {
+    const { props, known } = this.overlayOptions(first, second);
+    const title = [...props].find(([name]) => OVERLAY_TITLE_PROPERTIES.has(name))?.[1];
+    const titles = title ? this.literalTexts(title) : [];
+    const titulo = titles.length === 1 ? titles[0] : null;
+    const presented = props.get('component') ?? first;
+    const componente = ts.isIdentifier(presented) && /^[A-Z]/.test(presented.text) ? presented.text : undefined;
+    const listas = [...props.keys()].filter((name) => OVERLAY_BUTTON_LIST.test(name));
+    const inputs = props.get('inputs');
+    // Em alerta, só campos de escolha são gestos; campos de texto não.
+    const choice = (item: ts.ObjectLiteralExpression) => item.properties.some((property) =>
+      ts.isPropertyAssignment(property) && property.name.getText() === 'type' && /radio|checkbox/.test(property.initializer.getText()));
+    const botoes = listas.length || inputs
+      ? [...listas.flatMap((name) => this.overlayButtonTexts(props.get(name)!)), ...(inputs ? this.overlayButtonTexts(inputs, choice) : [])]
+      : known && !props.has('component') && ts.isObjectLiteralExpression(this.localValue(first)) ? [] : undefined;
+    return {
+      ...(titulo ? { titulo } : {}), ...(known && !title ? { semTitulo: true } : {}),
+      ...(botoes ? { botoes, listas } : {}), ...(componente ? { componente } : {}),
+      ...(known ? { props: new Map([...props].map(([name, item]) => {
+        const value = this.localValue(item);
+        return [name, ts.isStringLiteralLike(value) ? value.text : value.kind !== ts.SyntaxKind.FalseKeyword] as const;
+      })) } : {}),
+    };
   }
 
   private componentReferencesIn(
@@ -597,10 +677,9 @@ export class AngularProjectIndexer {
           if (OVERLAY_CONTROLLER.test(name) && !/service/i.test(name) && !opensProjectComponent) {
             const componentKey = `overlay-site\0${file}\0${node.getStart()}`;
             const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-            const titulo = this.overlayTitle(node.arguments[0]!, node.arguments[1]);
             overlaySites.push({ componentKey, file, line, origem: `${name}.${node.expression.name.text}() em ${owner.className}.${methodName}`,
               elemento: /alert/i.test(name) ? 'alerta' : /action.?sheet/i.test(name) ? 'menu-de-opcoes' : /popover/i.test(name) ? 'popover' : 'modal',
-              ...(titulo ? { titulo } : {}) });
+              ...this.overlayDeclaration(node.arguments[0]!, node.arguments[1]) });
             components.push({ key: componentKey, className: `${owner.className}-${methodName}`, tsFile: file, templateFile: null, inlineTemplate: false, inline: null,
               def: { selectors: [], source: 'projeto', outputs: new Map(), inputs: new Set(), template: '', methods: new Map(), hostListeners: [] },
               classText: '', serviceDependencies: new Map(), methods: new Map(), referencedComponents: new Set() });

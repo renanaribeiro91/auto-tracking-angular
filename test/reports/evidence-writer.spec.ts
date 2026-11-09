@@ -158,4 +158,21 @@ describe('planilha de evidência', () => {
         entries: [entry({ id: 'sem-origem', telas: [] })] }, 'sig')).rejects.toThrow("interação 'sem-origem' sem vínculo de tela");
       expect(fs.existsSync(file)).toBe(false);
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
-  });
+});
+
+it('eventos iguais na mesma tela viram uma linha', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-collapse-'));
+    try {
+      const file = path.join(root, 'e.xlsx');
+      await new EvidenceWorkbookWriter().writeEvidenceWorkbook(file, { owner: 'app', product: 'produto', branding: {}, entries: [
+        entry({ id: 'a', arquivo: 'a.ts', linha: 1 }), entry({ id: 'b', arquivo: 'b.ts', linha: 2 }), entry({ id: 'c', arquivo: 'b.ts', linha: 2 }),
+        entry({ id: 'd', rotulo: 'outro' }), entry({ id: 'e', telas: ['reembolso:outra'] }),
+      ] }, 'sig');
+      const ExcelJS = await loadWorkbookProvider();
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(file);
+      const sheet = workbook.getWorksheet('Reembolso')!;
+      expect(sheet.rowCount).toBe(5); // título, cabeçalho e 3 eventos distintos
+      expect(sheet.getCell('A4').value).toBe('a');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -1,6 +1,6 @@
 // T09–T14 — emissão runtime: gesto DOM → elemento marcado → owner → tela atual → schema → send
 import { validateEvent, type TrackingSchema } from '../../domain/contract/schema.js';
-import { labelSlug, MAX_PROVEN_LABEL, overlayComponentName, slug } from '../../domain/contract/slug.js';
+import { labelSlug, overlayActionLabel, overlayComponentName, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
 import type { TrackingElement } from '../../domain/contract/tracking-element.js';
 import { TrackingTokenCache } from '../../domain/contract/tracking-token.js';
@@ -574,8 +574,7 @@ export class DomEventTracker {
     if (!screen) return false;
     const action = slug(DomEventTracker.currentLabel(target));
     const context = action ? DomEventTracker.overlayContext(path[overlayIndex]!, target) : '';
-    // Rótulo autoexplicativo: a ação sozinha ("ok", "fechar") não diz de qual overlay veio.
-    const label = context && !action.includes(context) ? slug(`${action}-${context}`, MAX_PROVEN_LABEL) : action;
+    const label = overlayActionLabel(action, context);
     if (!label) {
       this.warnSafely('[auto-tracking] ação de overlay sem rótulo público; evento não enviado');
       return true;
