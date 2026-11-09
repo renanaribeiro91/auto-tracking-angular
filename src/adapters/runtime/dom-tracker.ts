@@ -860,7 +860,7 @@ export class DomEventTracker {
   }
 
   static baseParams(screen: Screen, environment: string, product: string): Params {
-    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, subfuncionalidade: screen.tela,
+    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, ...(screen.tela !== screen.funcionalidade ? { subfuncionalidade: screen.tela } : {}),
       tela: `${environment}:${product}:${screenPath(screen.funcionalidade, screen.tela)}` };
   }
 }

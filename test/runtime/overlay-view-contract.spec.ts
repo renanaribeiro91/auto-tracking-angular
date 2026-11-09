@@ -79,7 +79,7 @@ describe('visualizacao de overlay: planilha e runtime com o mesmo contrato', () 
       document.querySelector('ion-modal')!.dispatchEvent(new CustomEvent('ionModalDidPresent', { bubbles: true, composed: true }));
       await flush();
       expect(sent).toEqual([{ name: 'visualizacao', params: { ambiente: 'app-x', produto: 'saude', funcionalidade: 'faturas',
-        subfuncionalidade: 'faturas', tela: 'app-x:saude:faturas', categoria: 'app-x:saude:faturas',
+        tela: 'app-x:saude:faturas', categoria: 'app-x:saude:faturas',
         elemento: 'modal', rotulo: 'indisponibilidade-temporaria', acao: 'visualizacao' } }]);
     } finally { stop(); }
   });

@@ -93,7 +93,7 @@ O motor descobre componentes Angular por metadados publicados no pacote (`ɵɵng
 | `ambiente` | resolvido pelo preset do aplicativo | idem | idem |
 | `produto` | `runtime.product` | idem | idem |
 | `funcionalidade` | do contexto da tela (`classic`) ou do token (`ref`) | idem | da tela visível do owner que apresentou o overlay |
-| `subfuncionalidade` | nome da tela; enviado só se o schema do consumidor o aceita | idem | idem |
+| `subfuncionalidade` | submódulo: nome da tela quando difere da funcionalidade (na tela raiz não é enviado); só se o schema do consumidor o aceita | idem | idem |
 | `tela` | `<ambiente>:<produto>:<funcionalidade>:<tela>`; só `<tela>` quando igual à funcionalidade (`menu:menu` → `menu`) | idem | idem |
 | `categoria` | igual a `tela` | — | igual a `tela` |
 | `acao` | `clique` | não enviada | `visualizacao` |

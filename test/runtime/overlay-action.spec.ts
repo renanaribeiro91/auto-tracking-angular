@@ -97,7 +97,8 @@ describe('overlay criado por código sem marcação', () => {
     try {
       document.querySelector('ion-modal')!.dispatchEvent(new CustomEvent('ionModalDidPresent', { bubbles: true }));
       await flush();
-      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'menu', subfuncionalidade: 'menu', tela: 'app-x:saude:menu', categoria: 'app-x:saude:menu' });
+      expect(sent[0]!.params).toMatchObject({ funcionalidade: 'menu', tela: 'app-x:saude:menu', categoria: 'app-x:saude:menu' });
+      expect(sent[0]!.params).not.toHaveProperty('subfuncionalidade');
     } finally { stop(); }
   });
 });

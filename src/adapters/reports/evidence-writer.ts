@@ -142,7 +142,7 @@ export class EvidenceWorkbookWriter {
           acao: entry.evento === 'screen_view' ? '' : entry.acao,
           elemento: entry.elemento,
           funcionalidade: screenRef ? modulo : '{funcionalidade-de-origem}',
-          subfuncionalidade: screenRef ? screenName : '{tela-de-origem}',
+          subfuncionalidade: !screenRef ? '{tela-de-origem}' : screenName === modulo ? '' : screenName,
           tela: screen,
           categoria: entry.evento === 'screen_view' ? '' : screen,
           rotulo: entry.rotulos?.length ? `Um de: ${entry.rotulos.join('; ')}` : entry.rotulo,

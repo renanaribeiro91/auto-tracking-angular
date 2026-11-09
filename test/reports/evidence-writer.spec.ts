@@ -52,7 +52,7 @@ describe('planilha de evidência', () => {
     expect(String(workbook.getWorksheet('Resumo')?.getCell('B5').value)).not.toMatch(/marca-especifica|cliente-real/i);
     await expect(writeEvidenceWorkbook(file, { ...input, branding: { primaryColor: 'invalida' } }, 'sig')).rejects.toThrow('#RRGGBB');
   });
-  it('subfuncionalidade é a tela; tela igual à funcionalidade não se repete', async () => {
+  it('subfuncionalidade só existe em submódulo; tela igual à funcionalidade não se repete', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-sub-')), 'e.xlsx');
     await writeEvidenceWorkbook(file, { owner: 'app', product: 'saude', branding: {},
       entries: [entry({}), entry({ id: 'menu-voltar', funcionalidade: 'menu', tela: 'menu', telas: ['menu:menu'] })] }, 'sig');
@@ -65,7 +65,8 @@ describe('planilha de evidência', () => {
       return Object.fromEntries(labels.flatMap((label, index) => (label ? [[label, sheet.getRow(3).getCell(index).value]] : [])));
     };
     expect(row('Reembolso')).toMatchObject({ Subfuncionalidade: 'tipo', Tela: '{ambiente}:saude:reembolso:tipo' });
-    expect(row('Menu')).toMatchObject({ Subfuncionalidade: 'menu', Tela: '{ambiente}:saude:menu', Categoria: '{ambiente}:saude:menu' });
+    expect(row('Menu')['Subfuncionalidade'] || '').toBe('');
+    expect(row('Menu')).toMatchObject({ Tela: '{ambiente}:saude:menu', Categoria: '{ambiente}:saude:menu' });
   });
   it('mostra o rótulo exatamente como enviado e identifica a opção dinâmica', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-dynamic-')), 'e.xlsx');
