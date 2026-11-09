@@ -138,8 +138,10 @@ export class EvidenceWorkbookWriter {
           modulo,
           id: entry.id,
           evento: entry.evento,
-          acao: entry.acao,
+          // screen_view não envia ação: a planilha mostra só o que o evento leva.
+          acao: entry.evento === 'screen_view' ? '' : entry.acao,
           elemento: entry.elemento,
+          funcionalidade: screenRef ? modulo : '{funcionalidade-de-origem}',
           subfuncionalidade: screenRef ? screenName : '{tela-de-origem}',
           tela: screen,
           categoria: entry.evento === 'screen_view' ? '' : screen,
@@ -284,7 +286,7 @@ export class EvidenceWorkbookWriter {
     brandColor: string,
   ): void {
     for (const module of modules) {
-      const moduleRows: ModuleRow[] = rows.filter((row) => row.modulo === module).map((row) => ({ ...row, produto: input.product }));
+      const moduleRows: ModuleRow[] = rows.filter((row) => row.modulo === module).map((row) => ({ ...row, ambiente: '{ambiente}', produto: input.product }));
       const sheet = workbook.addWorksheet(names.get(module)!, { views: [{ state: 'frozen', ySplit: WORKBOOK_LAYOUT.moduleFrozenRows, showGridLines: false }] });
       sheet.columns = MODULE_WORKSHEET_COLUMNS.map((column) => ({
         key: column.key,

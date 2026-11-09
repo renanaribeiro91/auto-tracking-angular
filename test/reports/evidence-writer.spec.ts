@@ -174,5 +174,9 @@ it('eventos iguais na mesma tela viram uma linha', async () => {
       const sheet = workbook.getWorksheet('Reembolso')!;
       expect(sheet.rowCount).toBe(5); // título, cabeçalho e 3 eventos distintos
       expect(sheet.getCell('A4').value).toBe('a');
+      const header = (sheet.getRow(2).values as unknown[]);
+      expect(sheet.getRow(4).getCell(header.indexOf('Funcionalidade')).value).toBe('reembolso');
+      expect(sheet.getRow(4).getCell(header.indexOf('Subfuncionalidade')).value).toBe('tipo');
+      expect(sheet.getRow(4).getCell(header.indexOf('Ambiente')).value).toBe('{ambiente}');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

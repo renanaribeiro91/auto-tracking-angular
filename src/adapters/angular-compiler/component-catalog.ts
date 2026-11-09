@@ -106,7 +106,11 @@ export class AngularComponentCatalogBuilder {
     const defs: ComponentDef[] = [];
     for (const decl of declares.values()) {
       const p = this.objectProps(decl);
-      const selectors = this.elementSelectors(this.literalText(p.get('selector')) ?? '');
+      const selector = this.literalText(p.get('selector')) ?? '';
+      const declaredType = p.get('type');
+      // Overlay não é usado por tag: `tag[input]` ainda identifica o componente apresentado.
+      const presented = declaredType && ts.isIdentifier(declaredType) && overlayClasses.includes(declaredType.text);
+      const selectors = this.elementSelectors(presented ? selector.replace(/\[[^\]]*\]/g, '') : selector);
       if (selectors.length === 0) continue;
       const outputs = new Map<string, string>();
       const inputs = new Set<string>();

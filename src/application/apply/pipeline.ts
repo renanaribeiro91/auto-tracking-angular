@@ -4,10 +4,10 @@ import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
 import { listItemFields, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
 import { ComponentScreenResolver } from './component-screen-resolver.js';
-import type { ComponentInfo, ProjectIndex } from './ports/project-index.js';
+import type { ComponentInfo, OverlaySite, ProjectIndex } from './ports/project-index.js';
 import { ScreenIdentityResolver } from './screen-identity-resolver.js';
 import { ENGINE_VERSION } from './constants.js';
-import { overlayGestures } from './overlay-gestures.js';
+import { overlayGestures, overlayHeading } from './overlay-gestures.js';
 import { tagSurface, untagSurface } from './surface-tagger.js';
 import { resolveProductionUsage } from './production-usage.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
@@ -110,7 +110,7 @@ export class TrackingPipeline {
         });
       }
       const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, index.components.map((c) => c.def),
-        (index.overlaySites ?? []).flatMap((site) => site.componente ?? []));
+        (index.overlaySites ?? []).flatMap((site) => [site, ...(site.variantes ?? [])].flatMap((item) => item.componente ?? [])));
       // identidade de analytics única por tela: refina só as telas que colidiriam com outra
       const refineOf = new Map<ComponentInfo, 1 | 2 | 3>();
       const routedComponents = index.components.filter((component) => index.routedComponents.has(component.key));
@@ -226,7 +226,6 @@ export class TrackingPipeline {
         if (!usage.components.has(site.componentKey)) continue;
         const component = index.components.find((item) => item.key === site.componentKey)!;
         const resolved = screensOf(component);
-        const rotulo = site.titulo ? labelSlug(site.titulo) : `[titulo-do-${site.elemento}-exibido]`;
         const name = slug(component.className.replace(/([a-z0-9])([A-Z])/g, '$1-$2'), 120);
         const uniqueId = (base: string): string => {
           let id = base;
@@ -234,21 +233,48 @@ export class TrackingPipeline {
           usedIds.add(id);
           return id;
         };
-        const row = { owner: config.owner, elemento: site.elemento, origem: site.origem, ...identity(component),
-          telas: resolved.length ? resolved : [ORIGIN_SCREEN], vinculo_tela: 'origem' as const,
-          arquivo: this.relativePath(consumerRoot, site.file), linha: site.line };
-        entries.push({ ...row, id: uniqueId(`${name}-visualizacao`), evento: 'visualizacao', acao: 'visualizacao', rotulo });
-        // Mesmo rótulo que o runtime envia; o que só existe em runtime aparece como marcador, nunca some.
-        const context = site.titulo ? labelSlug(site.titulo) : site.semTitulo ? site.elemento : `[titulo-do-${site.elemento}-exibido]`;
-        const clicks = new Map(overlayGestures(site, site.componente ? catalog.ofClass?.(site.componente) : undefined).map((text) => {
-          const action = text === null ? '' : labelSlug(text);
-          const known = action && !context.startsWith('[');
-          return [known ? overlayActionLabel(action, context) : `${action ? overlayActionLabel(action, '') : '[rotulo-do-botao-exibido]'}-${context}`, action] as const;
-        }));
-        for (const [clickLabel, action] of clicks) {
-          const id = uniqueId(`${name}-clique-${action || 'botao'}`);
+        // Cada chamada comprova título e botões nas telas de onde parte; só o que nenhuma chamada cobre fica como a abertura declara.
+        const variants = (site.variantes ?? []).filter((variant) => usage.methods.get(variant.ownerKey)?.has(variant.method)).map((variant) => {
+          const owner = index.components.find((item) => item.key === variant.ownerKey);
+          return { declaration: { ...site, ...variant }, telas: owner ? screensOf(owner).filter((screen) => resolved.includes(screen)) : [] };
+        }).filter((variant) => variant.telas.length);
+        const covered = new Set(variants.flatMap((variant) => variant.telas));
+        const remaining = resolved.filter((screen) => !covered.has(screen));
+        const groups: { declaration: OverlaySite; telas: string[] }[] = [...variants];
+        if (!variants.length) groups.push({ declaration: site, telas: resolved.length ? resolved : [ORIGIN_SCREEN] });
+        else if (remaining.length) groups.push({ declaration: site, telas: remaining });
+
+        const rows = new Map<string, { evento: 'visualizacao' | 'click'; rotulo: string; telas: Set<string> }>();
+        const addRow = (evento: 'visualizacao' | 'click', rotulo: string, telas: readonly string[]): void => {
+          const row = rows.get(`${evento}\0${rotulo}`) ?? { evento, rotulo, telas: new Set<string>() };
+          for (const screen of telas) row.telas.add(screen);
+          rows.set(`${evento}\0${rotulo}`, row);
+        };
+        for (const { declaration, telas } of groups) {
+          const presented = declaration.componente ? catalog.ofClass?.(declaration.componente) : undefined;
+          // Mesma ordem do runtime: título declarado, cabeçalho do componente e, só na visualização, o nome do componente.
+          const heading = declaration.titulo ?? (declaration.semTitulo ? overlayHeading(presented) : null);
+          const placeholder = `[titulo-do-${site.elemento}-exibido]`;
+          addRow('visualizacao', heading ? labelSlug(heading) : (heading === undefined && overlayComponentName(presented?.selectors[0] ?? '')) || placeholder, telas);
+          // O que só existe em runtime aparece como marcador, nunca some.
+          const context = heading ? labelSlug(heading) : heading === undefined ? site.elemento : placeholder;
+          for (const text of overlayGestures(declaration, presented)) {
+            const action = text === null ? '' : labelSlug(text);
+            addRow('click', action && !context.startsWith('[') ? overlayActionLabel(action, context)
+              : `${action ? overlayActionLabel(action, '') : '[rotulo-do-botao-exibido]'}-${context}`, telas);
+          }
+        }
+        const many = [...rows.values()].filter((row) => row.evento === 'visualizacao').length > 1;
+        for (const row of [...rows.values()].sort((a, b) => a.rotulo.localeCompare(b.rotulo))) {
+          const entry = { owner: config.owner, elemento: site.elemento, origem: site.origem, ...identity(component), telas: [...row.telas].sort(),
+            vinculo_tela: 'origem' as const, arquivo: this.relativePath(consumerRoot, site.file), linha: site.line };
+          if (row.evento === 'visualizacao') {
+            entries.push({ ...entry, id: uniqueId(`${name}-visualizacao${many ? `-${slug(row.rotulo)}` : ''}`), evento: 'visualizacao', acao: 'visualizacao', rotulo: row.rotulo });
+            continue;
+          }
+          const id = uniqueId(`${name}-clique-${slug(row.rotulo)}`);
           runtimeContract.add(id);
-          entries.push({ ...row, id, evento: 'click', acao: 'clique', rotulo: clickLabel });
+          entries.push({ ...entry, id, evento: 'click', acao: 'clique', rotulo: row.rotulo });
         }
       }
       for (const surface of index.surfaces ?? []) {

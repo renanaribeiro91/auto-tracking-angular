@@ -59,6 +59,9 @@ export interface ServiceInfo {
   readonly openedComponents: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
+export type OverlayDeclaration = Pick<OverlaySite, 'titulo' | 'semTitulo' | 'botoes' | 'listas' | 'componente' | 'props'>;
+export type OverlayVariant = OverlayDeclaration & { readonly ownerKey: string; readonly method: string };
+
 /** Resultado da leitura estrutural do projeto Angular, independente do compilador usado. */
 export interface OverlaySite {
   readonly componentKey: string;
@@ -75,6 +78,8 @@ export interface OverlaySite {
   readonly componente?: string;
   /** Opções conhecidas: literal de texto, `false` ou `true` (presente com outro valor). Ausente se não forem conhecidas. */
   readonly props?: ReadonlyMap<string, string | boolean>;
+  /** Abertura por método com parâmetros: o que cada chamada comprova, com a classe e o método de onde ela parte. */
+  readonly variantes?: readonly OverlayVariant[];
   readonly origem: string;
   readonly file: string;
   readonly line: number;

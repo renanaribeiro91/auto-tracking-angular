@@ -6,9 +6,36 @@ import * as path from 'path';
 import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
-import type { ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
+import type { OverlayDeclaration, OverlayVariant, ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
 import { OVERLAY_API, OVERLAY_BUTTON_LIST, OVERLAY_BUTTON_TEXT, OVERLAY_CONTROLLER, OVERLAY_TITLE_PROPERTIES, PROJECT_INDEX_IGNORED_DIRECTORIES, TEST_DOUBLE_CLASS_PATTERN, TEST_DOUBLE_FILE_PATTERN, TEST_INFRASTRUCTURE_FILE_PATTERN } from './project-index.constants.js';
 export type { ComponentInfo, InlineTemplate, ProjectIndex } from '../../application/apply/ports/project-index.js';
+
+/** Chamada `this.metodo()` ou `this.dependencia.metodo()` dentro de uma classe do projeto. */
+interface MethodCall {
+  readonly ownerKey: string;
+  readonly method: string;
+  readonly receiver: string;
+  readonly callee: string;
+  readonly node: ts.CallExpression;
+  readonly signature: ts.SignatureDeclaration | undefined;
+}
+
+interface PendingOverlay {
+  readonly componentKey: string;
+  readonly ownerKey: string;
+  readonly method: string;
+  readonly signature: ts.SignatureDeclaration;
+  readonly node: ts.CallExpression;
+}
+
+interface OverlayCallContext {
+  readonly ownerKey: string;
+  readonly method: string;
+  readonly bindings: ReadonlyMap<ts.ParameterDeclaration, ts.Expression | undefined>;
+}
+
+/** Limite de métodos encadeados entre a tela e a abertura do overlay. */
+const OVERLAY_CALL_DEPTH = 5;
 
 interface ClassRecord {
   readonly key: string;
@@ -288,25 +315,162 @@ export class AngularProjectIndexer {
     return unique.size === 1 ? unique.values().next().value! : null;
   }
 
-  /** Expressão sem invólucros, seguindo `const` do método onde foi declarada. */
+  /** Argumentos da cadeia de chamadas em avaliação; parâmetro fora dela só é conhecido em runtime. */
+  private bindings = new Map<ts.ParameterDeclaration, ts.Expression | undefined>();
+  /** Constantes de módulo, enums e estáticos por nome; nome ambíguo fica de fora. */
+  private statics = new Map<string, ts.Expression | null>();
+  private resolving = new Set<ts.Node>();
+
+  private collectStatics(sourceFiles: ReadonlyMap<string, ts.SourceFile>): void {
+    this.statics = new Map();
+    const add = (name: string, value: ts.Expression | undefined): void => {
+      if (value) this.statics.set(name, this.statics.has(name) && this.statics.get(name) !== value ? null : value);
+    };
+    const defaults = new Map<string, ts.Expression>();
+    for (const [file, source] of sourceFiles) {
+      for (const statement of source.statements) if (ts.isExportAssignment(statement) && !statement.isExportEquals) defaults.set(file, statement.expression);
+    }
+    for (const [file, source] of sourceFiles) {
+      for (const statement of source.statements) {
+        if (ts.isImportDeclaration(statement) && statement.importClause?.name && ts.isStringLiteralLike(statement.moduleSpecifier) && statement.moduleSpecifier.text.startsWith('.')) {
+          const target = path.resolve(path.dirname(file), statement.moduleSpecifier.text);
+          add(statement.importClause.name.text, defaults.get(`${target}.ts`) ?? defaults.get(path.join(target, 'index.ts')));
+        }
+        if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const) {
+          for (const item of statement.declarationList.declarations) if (ts.isIdentifier(item.name)) add(item.name.text, item.initializer);
+        }
+        if (ts.isEnumDeclaration(statement)) for (const member of statement.members) add(`${statement.name.text}.${member.name.getText()}`, member.initializer);
+        if (ts.isClassDeclaration(statement) && statement.name) {
+          for (const member of statement.members) {
+            if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) {
+              add(`${statement.name.text}.${member.name.text}`, member.initializer);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** Verdadeiro/falso quando o código comprova; `undefined` quando só o runtime sabe. */
+  private truthiness(expression: ts.Expression): boolean | undefined {
+    if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) {
+      const inner = this.truthiness(expression.operand);
+      return inner === undefined ? undefined : !inner;
+    }
+    if (ts.isBinaryExpression(expression) && [ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+      ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken].includes(expression.operatorToken.kind)
+      && /^(?:null|undefined)$/.test(expression.right.getText())) {
+      const present = this.truthiness(expression.left);
+      if (present === undefined) return undefined;
+      return [ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken].includes(expression.operatorToken.kind) ? !present : present;
+    }
+    const value = this.localValue(expression);
+    if (ts.isStringLiteralLike(value)) return !!value.text;
+    if (ts.isObjectLiteralExpression(value) || ts.isArrayLiteralExpression(value) || value.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (value.kind === ts.SyntaxKind.FalseKeyword || value.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(value) && value.text === 'undefined')) return false;
+    return undefined;
+  }
+
+  private memberValue(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): ts.Expression | undefined {
+    const argument = ts.isElementAccessExpression(node) ? node.argumentExpression : undefined;
+    const key = ts.isPropertyAccessExpression(node) ? node.name.text
+      : argument && (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) ? argument.text : undefined;
+    if (key === undefined) return undefined;
+    const declared = ts.isIdentifier(node.expression) ? this.statics.get(`${node.expression.text}.${key}`) : undefined;
+    if (declared) return this.localValue(declared);
+    const base = this.localValue(node.expression);
+    if (ts.isArrayLiteralExpression(base)) {
+      const item = base.elements[Number(key)];
+      return item && !ts.isSpreadElement(item) ? this.localValue(item) : undefined;
+    }
+    if (!ts.isObjectLiteralExpression(base)) return undefined;
+    const property = base.properties.find((item) => item.name && (ts.isIdentifier(item.name) || ts.isStringLiteralLike(item.name) || ts.isNumericLiteral(item.name)) && item.name.text === key);
+    if (property && ts.isPropertyAssignment(property)) return this.localValue(property.initializer);
+    return property && ts.isShorthandPropertyAssignment(property) ? this.localValue(property.name) : undefined;
+  }
+
+  /** Retorno de `this.auxiliar(args)` quando o corpo é sequencial e cada condição é comprovada; senão, só o runtime sabe. */
+  private returnedValue(call: ts.CallExpression): ts.Expression | undefined {
+    if (!ts.isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
+    const name = call.expression.name.text;
+    let owner: ts.Node | undefined = call.parent;
+    while (owner && !ts.isClassLike(owner)) owner = owner.parent;
+    const method = owner && (owner as ts.ClassLikeDeclaration).members.find((member): member is ts.MethodDeclaration =>
+      ts.isMethodDeclaration(member) && member.name.getText() === name && !!member.body);
+    if (!method?.body) return undefined;
+    const previous = new Map(this.bindings);
+    method.parameters.forEach((parameter, index) => this.bindings.set(parameter, call.arguments[index]));
+    const locals = new Map<string, ts.Expression>();
+    const read = (expression: ts.Expression): ts.Expression => (ts.isIdentifier(expression) && locals.get(expression.text)) || this.localValue(expression);
+    // `null` encerra sem valor comprovado; `undefined` segue para o próximo comando.
+    const run = (statements: readonly ts.Statement[]): ts.Expression | null | undefined => {
+      for (const statement of statements) {
+        let result: ts.Expression | null | undefined;
+        if (ts.isReturnStatement(statement)) result = statement.expression ? read(statement.expression) : null;
+        else if (ts.isVariableStatement(statement)) {
+          for (const item of statement.declarationList.declarations) if (ts.isIdentifier(item.name) && item.initializer) locals.set(item.name.text, read(item.initializer));
+        } else if (ts.isExpressionStatement(statement) && ts.isBinaryExpression(statement.expression)
+          && statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(statement.expression.left)) {
+          locals.set(statement.expression.left.text, read(statement.expression.right));
+        } else if (ts.isIfStatement(statement)) {
+          const condition = this.truthiness(read(statement.expression));
+          if (condition === undefined) return null;
+          const branch = condition ? statement.thenStatement : statement.elseStatement;
+          if (branch) result = run(ts.isBlock(branch) ? branch.statements : [branch]);
+        } else return null;
+        if (result !== undefined) return result;
+      }
+      return undefined;
+    };
+    try {
+      return run(method.body.statements) ?? undefined;
+    } finally {
+      this.bindings = previous;
+    }
+  }
+
+  /** Valor que o código comprova para a expressão: segue `const`, argumentos da chamada, constantes e membros literais. */
   private localValue(expression: ts.Expression): ts.Expression {
     let value = expression;
     while (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isNonNullExpression(value)) value = value.expression;
-    if (!ts.isIdentifier(value)) return value;
-    const name = value.text;
-    for (let scope: ts.Node | undefined = value.parent; scope; scope = scope.parent) {
-      if (!ts.isFunctionLike(scope)) continue;
-      let initializer: ts.Expression | undefined;
-      const find = (node: ts.Node): void => {
-        if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const) {
-          for (const item of node.declarations) if (ts.isIdentifier(item.name) && item.name.text === name && item.initializer) initializer = item.initializer;
+    if (this.resolving.has(value)) return value;
+    this.resolving.add(value);
+    try {
+      if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) return this.memberValue(value) ?? value;
+      if (ts.isCallExpression(value)) return this.returnedValue(value) ?? value;
+      if (ts.isConditionalExpression(value)) {
+        const condition = this.truthiness(value.condition);
+        return condition === undefined ? value : this.localValue(condition ? value.whenTrue : value.whenFalse);
+      }
+      if (ts.isBinaryExpression(value) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(value.operatorToken.kind)) {
+        const left = this.truthiness(value.left);
+        return left === undefined ? value : this.localValue(left ? value.left : value.right);
+      }
+      if (!ts.isIdentifier(value)) return value;
+      const name = value.text;
+      for (let scope: ts.Node | undefined = value.parent; scope; scope = scope.parent) {
+        if (!ts.isFunctionLike(scope)) continue;
+        const parameter = scope.parameters.find((item) => ts.isIdentifier(item.name) && item.name.text === name) as ts.ParameterDeclaration | undefined;
+        if (parameter) {
+          if (!this.bindings.has(parameter)) return value;
+          const argument = this.bindings.get(parameter) ?? parameter.initializer;
+          return argument ? this.localValue(argument) : ts.factory.createIdentifier('undefined');
         }
-        if (!initializer) ts.forEachChild(node, find);
-      };
-      find(scope);
-      if (initializer) return this.localValue(initializer);
+        let initializer: ts.Expression | undefined;
+        const find = (node: ts.Node): void => {
+          if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const) {
+            for (const item of node.declarations) if (ts.isIdentifier(item.name) && item.name.text === name && item.initializer) initializer = item.initializer;
+          }
+          if (!initializer) ts.forEachChild(node, find);
+        };
+        find(scope);
+        if (initializer) return this.localValue(initializer);
+      }
+      const declared = this.statics.get(name);
+      return declared ? this.localValue(declared) : value;
+    } finally {
+      this.resolving.delete(value);
     }
-    return value;
   }
 
   /** Opções do overlay achatadas (raiz da chamada, `componentProps`, `data`); `known` é falso se parte só existe em runtime. */
@@ -320,6 +484,12 @@ export class AngularProjectIndexer {
       found = true;
       for (const property of value.properties) {
         if (ts.isShorthandPropertyAssignment(property)) { props.set(property.name.text, property.name); continue; }
+        if (ts.isSpreadAssignment(property)) {
+          const spread = this.overlayOptions(property.expression);
+          known &&= spread.known;
+          for (const [name, item] of spread.props) props.set(name, item);
+          continue;
+        }
         if (!ts.isPropertyAssignment(property) || !(ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name))) { known = false; continue; }
         if (!['componentProps', 'data'].includes(property.name.text)) { props.set(property.name.text, property.initializer); continue; }
         const nested = this.overlayOptions(property.initializer);
@@ -359,12 +529,12 @@ export class AngularProjectIndexer {
   }
 
   /** O que a abertura de um overlay declara: título, botões e opções que decidem os gestos do componente apresentado. */
-  private overlayDeclaration(first: ts.Expression, second: ts.Expression | undefined): Pick<OverlaySite, 'titulo' | 'semTitulo' | 'botoes' | 'listas' | 'componente' | 'props'> {
+  private overlayDeclaration(first: ts.Expression, second: ts.Expression | undefined): OverlayDeclaration {
     const { props, known } = this.overlayOptions(first, second);
     const title = [...props].find(([name]) => OVERLAY_TITLE_PROPERTIES.has(name))?.[1];
     const titles = title ? this.literalTexts(title) : [];
     const titulo = titles.length === 1 ? titles[0] : null;
-    const presented = props.get('component') ?? first;
+    const presented = this.localValue(props.get('component') ?? first);
     const componente = ts.isIdentifier(presented) && /^[A-Z]/.test(presented.text) ? presented.text : undefined;
     const listas = [...props.keys()].filter((name) => OVERLAY_BUTTON_LIST.test(name));
     const inputs = props.get('inputs');
@@ -382,6 +552,84 @@ export class AngularProjectIndexer {
         return [name, ts.isStringLiteralLike(value) ? value.text : value.kind !== ts.SyntaxKind.FalseKeyword] as const;
       })) } : {}),
     };
+  }
+
+  /** Método (ou propriedade com função) que contém o nó. */
+  private methodOf(node: ts.Node): ts.SignatureDeclaration | undefined {
+    for (let current = node.parent; current; current = current.parent) {
+      if (ts.isMethodDeclaration(current) || ts.isConstructorDeclaration(current) || ts.isAccessor(current)) return current;
+      if ((ts.isArrowFunction(current) || ts.isFunctionExpression(current)) && ts.isPropertyDeclaration(current.parent)) return current;
+    }
+    return undefined;
+  }
+
+  /**
+   * Cada caminho de chamada até a abertura, com os argumentos de toda a cadeia. Parte de um componente; quem o template
+   * chama ou nenhum código chama permanece sem argumentos comprovados.
+   */
+  private callContexts(
+    key: string, method: string, signature: ts.SignatureDeclaration, callsByTarget: ReadonlyMap<string, readonly MethodCall[]>,
+    componentOf: (key: string) => ComponentInfo | undefined, path: ReadonlySet<string>,
+  ): OverlayCallContext[] {
+    const contexts: OverlayCallContext[] = [];
+    for (const call of callsByTarget.get(`${key}\0${method}`) ?? []) {
+      const spreadAt = call.node.arguments.findIndex((argument) => ts.isSpreadElement(argument));
+      const bindings = new Map<ts.ParameterDeclaration, ts.Expression | undefined>();
+      signature.parameters.forEach((parameter, index) => {
+        if (spreadAt < 0 || index < spreadAt) bindings.set(parameter, call.node.arguments[index]);
+      });
+      const callerKey = `${call.ownerKey}\0${call.method}`;
+      const caller = componentOf(call.ownerKey);
+      const outer = call.signature?.parameters.length && !path.has(callerKey) && path.size < OVERLAY_CALL_DEPTH
+        ? this.callContexts(call.ownerKey, call.method, call.signature, callsByTarget, componentOf, new Set([...path, callerKey])) : [];
+      for (const context of outer) contexts.push({ ...context, bindings: new Map([...context.bindings, ...bindings]) });
+      if (caller && (!outer.length || caller.def.template.includes(`${call.method}(`))) contexts.push({ ownerKey: call.ownerKey, method: call.method, bindings });
+    }
+    return contexts;
+  }
+
+  /** O que cada chamada comprova sobre as aberturas feitas em métodos com parâmetros. */
+  private overlayVariants(
+    pending: readonly PendingOverlay[], calls: readonly MethodCall[], components: readonly ComponentInfo[], services: ReadonlyMap<string, ServiceInfo>,
+  ): ReadonlyMap<string, readonly OverlayVariant[]> {
+    const byKey = new Map<string, ComponentInfo | ServiceInfo>([...components.map((item) => [item.key, item] as const), ...services]);
+    const componentOf = (key: string): ComponentInfo | undefined => {
+      const owner = byKey.get(key);
+      return owner && 'def' in owner ? owner : undefined;
+    };
+    const chain = (key: string | undefined): string[] => {
+      const keys: string[] = [];
+      for (let current = key; current && byKey.has(current) && !keys.includes(current); current = byKey.get(current)!.baseClass) keys.push(current);
+      return keys;
+    };
+    const callsByTarget = new Map<string, MethodCall[]>();
+    for (const call of calls) {
+      const target = call.receiver === 'this' ? call.ownerKey : chain(call.ownerKey).flatMap((key) => {
+        const owner = byKey.get(key)!;
+        const dependency = ('def' in owner ? owner.serviceDependencies : owner.dependencies).get(call.receiver);
+        return dependency ? [dependency] : [];
+      })[0];
+      for (const key of chain(target)) {
+        const group = callsByTarget.get(`${key}\0${call.callee}`) ?? [];
+        group.push(call);
+        callsByTarget.set(`${key}\0${call.callee}`, group);
+      }
+    }
+    const variants = new Map<string, OverlayVariant[]>();
+    for (const item of pending) {
+      const self = componentOf(item.ownerKey);
+      const contexts = this.callContexts(item.ownerKey, item.method, item.signature, callsByTarget, componentOf, new Set([`${item.ownerKey}\0${item.method}`]));
+      if (self?.def.template.includes(`${item.method}(`)) contexts.push({ ownerKey: item.ownerKey, method: item.method, bindings: new Map() });
+      variants.set(item.componentKey, contexts.map((context) => {
+        this.bindings = new Map(context.bindings);
+        try {
+          return { ownerKey: context.ownerKey, method: context.method, ...this.overlayDeclaration(item.node.arguments[0]!, item.node.arguments[1]) };
+        } finally {
+          this.bindings = new Map();
+        }
+      }));
+    }
+    return variants;
   }
 
   private componentReferencesIn(
@@ -572,6 +820,9 @@ export class AngularProjectIndexer {
     const rawServiceOpens = new Map<string, Map<string, Set<string>>>();
     const overlayComponents = new Map<string, string>();
     const overlaySites: OverlaySite[] = [];
+    const pendingOverlays: PendingOverlay[] = [];
+    const methodCalls: MethodCall[] = [];
+    this.collectStatics(sourceFiles);
     const surfaces: SurfaceDeclaration[] = [];
     const surfaceErrors: { file: string; line: number; message: string }[] = [];
     let providerCalls = 0;
@@ -593,6 +844,12 @@ export class AngularProjectIndexer {
         }
       };
       const visit = (node: ts.Node, owner: ClassRecord | null, methodName: string | null): void => {
+        if (owner && methodName && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const target = node.expression.expression;
+          const receiver = target.kind === ts.SyntaxKind.ThisKeyword ? 'this'
+            : ts.isPropertyAccessExpression(target) && target.expression.kind === ts.SyntaxKind.ThisKeyword ? target.name.text : null;
+          if (receiver) methodCalls.push({ ownerKey: owner.key, method: methodName, receiver, callee: node.expression.name.text, node, signature: this.methodOf(node) });
+        }
         if (ts.isClassDeclaration(node) && node.name) {
           owner = recordsByFile.get(file)?.get(node.name.text) ?? null;
           methodName = null;
@@ -680,6 +937,8 @@ export class AngularProjectIndexer {
             overlaySites.push({ componentKey, file, line, origem: `${name}.${node.expression.name.text}() em ${owner.className}.${methodName}`,
               elemento: /alert/i.test(name) ? 'alerta' : /action.?sheet/i.test(name) ? 'menu-de-opcoes' : /popover/i.test(name) ? 'popover' : 'modal',
               ...this.overlayDeclaration(node.arguments[0]!, node.arguments[1]) });
+            const signature = this.methodOf(node);
+            if (signature?.parameters.length) pendingOverlays.push({ componentKey, ownerKey: owner.key, method: methodName, signature, node });
             components.push({ key: componentKey, className: `${owner.className}-${methodName}`, tsFile: file, templateFile: null, inlineTemplate: false, inline: null,
               def: { selectors: [], source: 'projeto', outputs: new Map(), inputs: new Set(), template: '', methods: new Map(), hostListeners: [] },
               classText: '', serviceDependencies: new Map(), methods: new Map(), referencedComponents: new Set() });
@@ -738,6 +997,8 @@ export class AngularProjectIndexer {
       };
       inspect(source);
     }
+    const variants = this.overlayVariants(pendingOverlays, methodCalls, components, services);
+    overlaySites.splice(0, overlaySites.length, ...overlaySites.map((site) => variants.get(site.componentKey)?.length ? { ...site, variantes: variants.get(site.componentKey)! } : site));
     return { components, routedComponents, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
       dynamicMethodValues, eagerServices };
   }

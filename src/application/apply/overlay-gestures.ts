@@ -20,6 +20,12 @@ function gestureText(template: string, tag: string, end: number, attrs: Readonly
   return text && !text.includes('{{') ? text : null;
 }
 
+/** Cabeçalho do componente de biblioteca: texto fixo, `null` se interpolado, `undefined` se não houver. */
+export function overlayHeading(def: ComponentDef | undefined): string | null | undefined {
+  const text = /<(h[1-6]|ion-title)\b[^>]*>([\s\S]*?)<\/\1\s*>/.exec(def?.template ?? '')?.[2]?.replace(/<[^>]*>/g, ' ').trim();
+  return !text ? undefined : text.includes('{{') ? null : text;
+}
+
 /**
  * Gestos de um overlay sem template no projeto: os declarados na abertura e os do template do componente de
  * biblioteca apresentado, respeitando `*ngIf`/`*ngFor` pelas opções da abertura. `null` é gesto que só existe em runtime.
@@ -47,7 +53,7 @@ export function overlayGestures(site: OverlaySite, def: ComponentDef | undefined
     const parent = stack[stack.length - 1];
     const off = !!parent?.off || guardOff(attrs.get('*ngIf'));
     const list = /\bof\s+(\w+)/.exec(attrs.get('*ngFor') ?? '')?.[1] ?? parent?.list;
-    const clickable = attrs.has('(click)');
+    const clickable = [...attrs.keys()].some((name) => /^\((?:on)?click\)$/i.test(name));
     const action = ACTION_TAG.test(tag) || ACTION_ROLE.test(attrs.get('role') ?? '') || (clickable && (tag === 'a' || tag === 'ion-item' || tag.includes('-')));
     if (action && !off) {
       if (!list) gestures.push(gestureText(template, tag, match.index + match[0].length, attrs, site));

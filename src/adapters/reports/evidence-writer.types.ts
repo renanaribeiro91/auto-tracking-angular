@@ -19,6 +19,7 @@ export interface EvidenceRow {
   readonly evento: string;
   readonly acao: string;
   readonly elemento: string;
+  readonly funcionalidade: string;
   readonly subfuncionalidade: string;
   readonly tela: string;
   readonly categoria: string;
@@ -29,4 +30,4 @@ export interface EvidenceRow {
   readonly linha: number;
 }
 
-export type ModuleRow = EvidenceRow & { readonly produto: string };
+export type ModuleRow = EvidenceRow & { readonly ambiente: string; readonly produto: string };

@@ -11,7 +11,9 @@ export const MODULE_WORKSHEET_COLUMNS: readonly {
   { label: 'Evento', key: 'evento', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Ação', key: 'acao', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Elemento', key: 'elemento', minimumWidth: 9, maximumWidth: 90 },
+  { label: 'Ambiente', key: 'ambiente', minimumWidth: 12, maximumWidth: 40 },
   { label: 'Produto', key: 'produto', minimumWidth: 9, maximumWidth: 90 },
+  { label: 'Funcionalidade', key: 'funcionalidade', minimumWidth: 14, maximumWidth: 90 },
   { label: 'Subfuncionalidade', key: 'subfuncionalidade', minimumWidth: 18, maximumWidth: 90 },
   { label: 'Tela', key: 'tela', minimumWidth: 9, maximumWidth: 90 },
   { label: 'Categoria', key: 'categoria', minimumWidth: 9, maximumWidth: 90 },
@@ -54,5 +56,5 @@ export const WORKBOOK_LAYOUT = {
   screenNote: 'Tela = {ambiente}:{product}:<funcionalidade>:<tela> (só <tela> quando igual à funcionalidade)  ·  ambiente definido pela configuração do aplicativo',
   moduleNavigation: 'Clique no módulo para abrir a aba',
   backToSummary: '← Resumo',
-  centeredModuleColumns: ['evento', 'acao', 'elemento', 'produto', 'linha'] as const,
+  centeredModuleColumns: ['evento', 'acao', 'elemento', 'ambiente', 'produto', 'linha'] as const,
 } as const;
