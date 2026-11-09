@@ -9,7 +9,7 @@ import { createWorksheetBackground } from './watermark-background.js';
 import { loadWorkbookProvider } from './excel-workbook.js';
 import { inspectXlsx, readBoundedFile, readBrandingPng, XLSX_LIMITS } from './xlsx-safety.js';
 import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
-import { firedEvents } from '../../application/apply/fired-events.js';
+import { ORIGIN_MODULE, firedEvents } from '../../application/apply/fired-events.js';
 
 export type { WorkbookBranding, WorkbookInput } from './evidence-writer.types.js';
 
@@ -141,7 +141,6 @@ export class EvidenceWorkbookWriter {
           tela: params.tela,
           categoria: params.categoria ?? '',
           rotulo: params.rotulo ?? '',
-          tabBar: entry.tab_bar ?? '',
           opcaoSelecionada: params.opcao_selecionada_1 ?? '',
           origem: entry.origem,
           arquivo: entry.arquivo,
@@ -234,7 +233,7 @@ export class EvidenceWorkbookWriter {
 
   private writeIndicators(summary: Worksheet, rows: readonly Row[], modules: readonly string[], brandColor: string): void {
     const indicators: readonly number[] = [
-      modules.length,
+      modules.filter((module) => module !== ORIGIN_MODULE).length,
       new Set(rows.filter((row) => row.evento === 'screen_view').map((row) => `${row.modulo}|${row.tela}`)).size,
       // Mesma conta do índice por módulo: o total é a soma das abas.
       rows.filter((row) => row.evento === 'click').length,

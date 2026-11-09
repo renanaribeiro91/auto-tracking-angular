@@ -80,6 +80,8 @@ export interface OverlaySite {
   readonly props?: ReadonlyMap<string, string | boolean>;
   /** Abertura por método com parâmetros: o que cada chamada comprova, com a classe e o método de onde ela parte. */
   readonly variantes?: readonly OverlayVariant[];
+  /** Método de serviço que abre o overlay; sem chamada em produção, a abertura nunca acontece. */
+  readonly abertura?: { readonly ownerKey: string; readonly method: string };
   readonly origem: string;
   readonly file: string;
   readonly line: number;

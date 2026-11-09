@@ -49,6 +49,33 @@ describe('clique de overlay sem template no projeto: planilha igual ao runtime',
   const labels = (page: string) => clicksOf(page).map((entry) => [entry.elemento, entry.rotulo, entry.telas]);
   const screens = ['p:p'];
 
+  it('versão do código sai do módulo, salvo quando as duas gerações convivem', () => {
+    for (const name of ['login-v2', 'conta', 'conta-v2']) {
+      const cls = name.replace(/(^|-)(\w)/g, (_m, _d, c: string) => c.toUpperCase());
+      write(`src/pages/${name}/${name}.page.ts`, `@Component({selector:'app-${name}', templateUrl:'./${name}.page.html'}) export class ${cls}Page {}`);
+      write(`src/pages/${name}/${name}.page.html`, '<ion-content></ion-content>');
+    }
+    write('src/routes.ts', `import { LoginV2Page } from './pages/login-v2/login-v2.page'; import { ContaPage } from './pages/conta/conta.page'; import { ContaV2Page } from './pages/conta-v2/conta-v2.page';
+      export const r = [{ path: 'l', component: LoginV2Page }, { path: 'c', component: ContaPage }, { path: 'd', component: ContaV2Page }];`);
+    const modulos = new TrackingPipelineFactory().create().runPipeline(root, path.join(root, 'auto-tracking.config.ts')).entries
+      .filter((entry) => entry.evento === 'screen_view').map((entry) => entry.funcionalidade);
+    expect(modulos).toEqual(expect.arrayContaining(['login', 'conta', 'conta-v2']));
+    expect(modulos).not.toContain('login-v2');
+  });
+
+  it('método de serviço sem chamada não lista overlay; o chamado aparece na tela de quem chama', () => {
+    write('src/p/m.service.ts', `@Injectable({ providedIn: 'root' }) export class MService {
+      constructor(private modalCtrl: ModalController) {}
+      async usado() { const m = await this.modalCtrl.create({ component: LibModal, componentProps: { title: 'Usado' } }); await m.present(); }
+      async morto() { const m = await this.modalCtrl.create({ component: LibModal, componentProps: { title: 'Morto' } }); await m.present(); }
+    }`);
+    write('src/p/p.page.ts', `import { MService } from './m.service'; @Component({selector:'app-p', templateUrl:'./p.page.html'}) export class PPage {
+      constructor(private m: MService) {} ngOnInit() { this.m.usado(); } }`);
+    const origens = new TrackingPipelineFactory().create().runPipeline(root, path.join(root, 'auto-tracking.config.ts')).entries.map((entry) => entry.origem).join(' ');
+    expect(origens).toContain('MService.usado');
+    expect(origens).not.toContain('MService.morto');
+  });
+
   it('lê botões, ícone de fechar e link do componente de biblioteca, respeitando as opções da abertura', () => {
     expect(labels(`abrir() { const ok = { title: 'Entendi' };
       return this.modalCtrl.create({ component: LibModal, componentProps: { title: 'Extrato indisponível', link: 'Saiba mais', botoes: [ok, { title: 'Sair' }] } }); }`))

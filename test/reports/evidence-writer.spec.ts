@@ -96,7 +96,7 @@ describe('planilha de evidência', () => {
     const rels = await zip.file('xl/worksheets/_rels/sheet1.xml.rels')?.async('string');
     expect(rels ?? '').not.toContain('TargetMode="External"');
     // Evidências sem tela estática seguem visíveis e identificadas, sem atribuir uma rota fictícia.
-    expect(Object.keys(zip.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))).toHaveLength(2);
+    expect(Object.keys(zip.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))).toHaveLength(3);
     const shared = await zip.file('xl/sharedStrings.xml')!.async('string');
     expect(shared).toContain('app-sair');
     expect(shared).toContain('reutilizavel');
@@ -144,11 +144,9 @@ describe('planilha de evidência', () => {
     expect(summary.getImages()).toHaveLength(0);
     expect(moduleSheet.getImages()).toHaveLength(0);
     // Nenhuma célula extra ou desenho flutuante é criado pela marca-d'água.
-    expect(summary.rowCount).toBe(8);
-    expect(moduleSheet.rowCount).toBe(5);
-    expect([3, 4, 5].map((row) => moduleSheet.getCell(`A${row}`).value).sort()).toEqual([
-      'app-sair', 'reembolso-tipo-avancar', 'reutilizavel',
-    ].sort((a, b) => a.localeCompare(b)));
+    expect(summary.rowCount).toBe(9);
+    expect(moduleSheet.rowCount).toBe(3);
+    expect(moduleSheet.getCell('A3').value).toBe('reembolso-tipo-avancar');
   }, 20000);
 });
 
@@ -193,27 +191,28 @@ it('relatório e planilha usam o mesmo evento: raiz sem subfuncionalidade, subm�
     funcionalidade: '{funcionalidade-de-origem}', subfuncionalidade: '{tela-de-origem}' });
 });
 
-it('coluna Tab bar traz a aba clicada, o Resumo soma as abas e linhas iguais sem tela resolvida viram uma', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-tabbar-'));
+it('sem coluna de tab bar, o Resumo soma as abas e o que não tem tela fixa fica em Tela de origem, sem virar módulo', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-origem-'));
   try {
     const file = path.join(root, 'e.xlsx');
     await writeEvidenceWorkbook(file, { owner: 'app', product: 'produto', branding: {}, entries: [
-      entry({ id: 'a', elemento: 'tab-bar', rotulo: 'clube', tab_bar: 'Clube mais Saúde' }),
+      entry({ id: 'a', elemento: 'tab-bar', rotulo: 'clube' }),
       entry({ id: 'b', rotulo: 'outro' }),
       entry({ id: 'b2', rotulo: 'outro', telas: ['reembolso:lista'] }),
-      entry({ id: 'c', rotulo: 'x', telas: ['*'], funcionalidade: 'reembolso' }),
-      entry({ id: 'c2', rotulo: 'x', telas: ['*'], funcionalidade: 'reembolso' }),
+      entry({ id: 'c', rotulo: 'x', telas: ['*'], funcionalidade: 'modal-service' }),
+      entry({ id: 'c2', rotulo: 'x', telas: ['@origin'], funcionalidade: 'modal-service' }),
     ] }, 'sig');
     const ExcelJS = await loadWorkbookProvider();
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(file);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['Resumo', 'Reembolso', 'Tela de origem']);
     const sheet = workbook.getWorksheet('Reembolso')!;
-    const header = sheet.getRow(2).values as unknown[];
-    const column = header.indexOf('Tab bar');
-    const values = Array.from({ length: sheet.rowCount - 2 }, (_, index) => sheet.getRow(index + 3).getCell(column).value ?? '');
-    expect(values.filter(Boolean)).toEqual(['Clube mais Saúde']);
-    expect(sheet.rowCount - 2).toBe(4);
-    expect(workbook.getWorksheet('Resumo')!.getCell('D4').value).toBe(4);
+    expect(sheet.getRow(2).values as unknown[]).not.toContain('Tab bar');
+    expect(sheet.rowCount - 2).toBe(3);
+    expect(workbook.getWorksheet('Tela de origem')!.rowCount - 2).toBe(1);
+    const resumo = workbook.getWorksheet('Resumo')!;
+    expect(resumo.getCell('B4').value).toBe(1);
+    expect(resumo.getCell('D4').value).toBe(4);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -24,7 +24,6 @@ export interface EvidenceRow {
   readonly tela: string;
   readonly categoria: string;
   readonly rotulo: string;
-  readonly tabBar: string;
   readonly opcaoSelecionada: string;
   readonly origem: string;
   readonly arquivo: string;

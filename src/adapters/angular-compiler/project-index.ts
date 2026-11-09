@@ -38,6 +38,9 @@ interface OverlayCallContext {
 /** Limite de métodos encadeados entre a tela e a abertura do overlay. */
 const OVERLAY_CALL_DEPTH = 5;
 
+const OUTLET_TAGS: ReadonlySet<string> = new Set(['router-outlet', 'ion-router-outlet']);
+const WRAPPER_TAGS: ReadonlySet<string> = new Set(['div', 'section', 'main', 'article', 'ng-container', 'ion-app', 'ion-content']);
+
 interface ClassRecord {
   readonly key: string;
   readonly file: string;
@@ -1120,7 +1123,7 @@ export class AngularProjectIndexer {
           if (OVERLAY_CONTROLLER.test(name) && !/service/i.test(name) && !opensProjectComponent) {
             const componentKey = `overlay-site\0${file}\0${node.getStart()}`;
             const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-            overlaySites.push({ componentKey, file, line, origem: `${name}.${node.expression.name.text}() em ${owner.className}.${methodName}`,
+            overlaySites.push({ componentKey, file, line, ...(owner.kind === 'service' ? { abertura: { ownerKey: owner.key, method: methodName } } : {}), origem: `${name}.${node.expression.name.text}() em ${owner.className}.${methodName}`,
               elemento: /alert/i.test(name) ? 'alerta' : /action.?sheet/i.test(name) ? 'menu-de-opcoes' : /popover/i.test(name) ? 'popover' : 'modal',
               ...this.overlayDeclaration(node.arguments[0]!, node.arguments[1]) });
             const signature = this.methodOf(node);
@@ -1185,6 +1188,13 @@ export class AngularProjectIndexer {
     }
     const variants = this.overlayVariants(pendingOverlays, methodCalls, components, services);
     overlaySites.splice(0, overlaySites.length, ...overlaySites.map((site) => variants.get(site.componentKey)?.length ? { ...site, variantes: variants.get(site.componentKey)! } : site));
+    // Componente que só embrulha o outlet não mostra nada: quem a pessoa vê é a tela filha.
+    for (const component of components) {
+      const html = component.def.template.replace(/<!--[\s\S]*?-->/g, '');
+      const tags = [...html.matchAll(START_TAG)].map((tag) => tag[1]!.toLowerCase());
+      const text = html.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, '').trim();
+      if (routedComponents.has(component.key) && !text && tags.some((tag) => OUTLET_TAGS.has(tag)) && tags.every((tag) => OUTLET_TAGS.has(tag) || WRAPPER_TAGS.has(tag))) shellComponents.add(component.key);
+    }
     const declaration = (key: string): ts.ClassDeclaration | undefined => {
       const separator = key.lastIndexOf('#');
       return recordsByFile.get(key.slice(0, separator))?.get(key.slice(separator + 1))?.declaration;

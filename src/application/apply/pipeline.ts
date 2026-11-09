@@ -136,7 +136,18 @@ export class TrackingPipeline {
       if (unresolvedCollision) {
         throw new PipelineError(`identidade de tela ambígua '${unresolvedCollision[0]}' em ${unresolvedCollision[1].map((component) => this.relativePath(consumerRoot, component.tsFile)).join(', ')}`);
       }
-      const identity = (component: ComponentInfo) => identityFor(component, refineOf.get(component) ?? 0);
+      // Versão do código (`login-v2`) não é domínio: sai do nome, salvo quando as duas gerações convivem no projeto.
+      const unversioned = (name: string): string => name.replace(/-v\d+$/, '');
+      const routedModules = new Set([...finalScreenIds.keys()].map((key) => key.split(':')[0]!));
+      const identity = (component: ComponentInfo) => {
+        const found = identityFor(component, refineOf.get(component) ?? 0);
+        const baseModule = unversioned(found.funcionalidade);
+        const baseScreen = unversioned(found.tela);
+        return {
+          funcionalidade: routedModules.has(baseModule) ? found.funcionalidade : baseModule,
+          tela: finalScreenIds.has(`${found.funcionalidade}:${baseScreen}`) ? found.tela : baseScreen,
+        };
+      };
       const screensOf = this.componentScreenResolver.resolve(index, identity, usage.methods);
       if (index.providerCalls === 0) {
         diagnostics.push({ code: 'BOOTSTRAP_PROVIDER_MISSING', arquivo: this.relativePath(consumerRoot, scanRoot), linha: 1, mensagem: 'nenhum provideAutoTracking(<config>.runtime) no bootstrap: marcações não emitem em runtime' });
@@ -228,6 +239,8 @@ export class TrackingPipeline {
         if (!usage.components.has(site.componentKey)) continue;
         const component = index.components.find((item) => item.key === site.componentKey)!;
         const resolved = screensOf(component);
+        // Método de serviço que nada chama nunca abre o overlay: não há evento a listar.
+        if (!resolved.length && site.abertura && !usage.methods.get(site.abertura.ownerKey)?.has(site.abertura.method)) continue;
         const name = slug(component.className.replace(/([a-z0-9])([A-Z])/g, '$1-$2'), 120);
         const uniqueId = (base: string): string => {
           let id = base;
@@ -324,7 +337,7 @@ export class TrackingPipeline {
     // O relatório diz onde está no código e o que dispara: parâmetro do evento só existe em `eventos`, sem segunda versão.
     const relatorio = JSON.stringify({ entries: entries.map((entry) => ({
       id: entry.id, owner: entry.owner, evento: entry.evento, origem: entry.origem, arquivo: entry.arquivo, linha: entry.linha, telas: entry.telas,
-      ...(entry.vinculo_tela ? { vinculo_tela: entry.vinculo_tela } : {}), ...(entry.tab_bar ? { tab_bar: entry.tab_bar } : {}), ...(entry.ref ? { ref: entry.ref } : {}),
+      ...(entry.vinculo_tela ? { vinculo_tela: entry.vinculo_tela } : {}), ...(entry.ref ? { ref: entry.ref } : {}),
       eventos: firedEvents(entry, config.product).map((fired) => fired.params) })), diagnostics }, null, 2) + '\n';
     return { config, paths, changes, entries, diagnostics, relatorio, templates };
   }

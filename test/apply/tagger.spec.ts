@@ -82,7 +82,7 @@ describe('tagger: toda interação declarada no template', () => {
     expect(tagTemplate('<bsad-header (click)="cliqueVoltar()"></bsad-header>', ctx()).entries[0]!.rotulo).toBe('voltar');
     expect(tagTemplate('<div (click)="clickCheckbox()"></div>', ctx()).entries[0]!.rotulo).toBe('checkbox');
     expect(tagTemplate(`<ion-icon [attr.data-testid]="'icon-card-acompanhamento-lupa'" (click)="clique()"></ion-icon>`, ctx()).entries[0]!.rotulo)
-      .toBe('card-acompanhamento-lupa');
+      .toBe('acompanhamento-lupa');
   });
 
   it('wrapper sem texto usa o rótulo único do filho', () => {
@@ -171,10 +171,10 @@ describe('tagger: toda interação declarada no template', () => {
     expect(new TemplateTagger().elementoFor('x-tab-botao', new Map(), 'abaClick')).toBe('aba');
   });
 
-  it('clique de tab bar é tab-bar e leva o nome exibido da aba', () => {
+  it('clique de tab bar é tab-bar e usa o nome exibido da aba como rótulo', () => {
     const tab = def({ selectors: ['x-tab-bar'], outputs: new Map([['onClick', 'onClick']]), template: `<button (click)="onClick.emit()">x</button>` });
     const r = tagTemplate(`<x-tab-bar tabTitle="Clube mais Saúde" (onClick)="ir()"></x-tab-bar>`, ctx({ mode: 'ref', catalog: { get: (tag) => (tag === 'x-tab-bar' ? tab : catalog.get(tag)) } }));
-    expect(r.entries).toEqual([expect.objectContaining({ elemento: 'tab-bar', rotulo: 'clube-mais-saude', tab_bar: 'Clube mais Saúde' })]);
+    expect(r.entries).toEqual([expect.objectContaining({ elemento: 'tab-bar', rotulo: 'clube-mais-saude' })]);
   });
 
   it('saída cujo gesto já pertence a outra saída nunca dispara e fica fora da evidência', () => {

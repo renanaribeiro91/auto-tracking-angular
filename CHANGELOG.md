@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.8 — 2026-11-09
+
+- A planilha não tem coluna Tab bar: o clique na tab bar é uma linha da sua tela, como qualquer outro. O evento não muda.
+- Serviço ou componente não vira aba: o que dispara na tela em que a pessoa está fica em **Tela de origem**.
+- Método de serviço que nada chama não lista modal: a abertura nunca acontece.
+- Versão do código sai do nome do módulo e da tela (`login-v2` → `login`), salvo quando as duas gerações convivem no projeto.
+- Prefixo `item-` ou `card-` de id de teste não entra no rótulo.
+- Componente roteado que só embrulha o outlet não vira módulo nem tela.
+
 ## 2.3.7 — 2026-11-09
 
 - `relatorio.json` traz em `eventos[]` os parâmetros de cada disparo, da mesma fonte da planilha, inclusive `subfuncionalidade`; saem `funcionalidade` e `tela` do componente dono, que divergiam do enviado.

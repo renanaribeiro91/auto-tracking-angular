@@ -30,8 +30,6 @@ export interface TagEntry {
   readonly opcao_selecionada_1?: string;
   /** Rótulos possíveis provados por lista estática do componente; o enviado é o do item clicado. */
   readonly rotulos?: readonly string[];
-  /** Nome exibido da aba, só nos cliques de uma tab bar. */
-  readonly tab_bar?: string;
   /** binding de origem no template, por exemplo `(click)` ou `(back) em <ui-header>` */
   readonly origem: string;
   readonly arquivo: string;
@@ -454,8 +452,9 @@ export class TemplateTagger {
   /** Identificador técnico já presente no elemento (aria-label de teste ou data-testid). */
   private testId(attrs: ReadonlyMap<string, string>): string | undefined {
     const bound = attrs.get('[attr.data-testid]');
-    return this.accessibleCandidates(attrs).find(looksLikeIdentifier)
-      ?? attrs.get('data-testid') ?? (bound === undefined ? undefined : this.stringLiteral(bound) ?? this.literalPrefix(bound));
+    // Prefixo do tipo do elemento no id de teste não descreve a ação.
+    return (this.accessibleCandidates(attrs).find(looksLikeIdentifier)
+      ?? attrs.get('data-testid') ?? (bound === undefined ? undefined : this.stringLiteral(bound) ?? this.literalPrefix(bound)))?.replace(/^(?:(?:icon|btn|img)-)?(?:item|card)-/, '');
   }
 
   /** camelCase vira palavras: abrirHistoricoDetalhe → abrir-historico-detalhe */
@@ -807,7 +806,7 @@ export class TemplateTagger {
           desired.set('data-at-event', event);
           derived.add('data-at-event');
         }
-        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos } : {}), ...(elemento === 'tab-bar' && label ? { tab_bar: label } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
+        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
       }
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
@@ -875,7 +874,7 @@ export class TemplateTagger {
             portalAnchors.set(anchor, anchored);
           }
           if (dynamicLabel && !dynamicIds.includes(id)) dynamicIds.push(id);
-          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos } : {}), ...(elemento === 'tab-bar' && ownLabel ? { tab_bar: ownLabel } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
+          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
           if (ownLabel && this.labelBehaviorConflict(ownLabel, handler)) {
             diagnostics.push({ code: 'VISIBLE_LABEL_BEHAVIOR_CONFLICT', arquivo: ctx.relFile, linha, mensagem: `texto '${ownLabel}' contradiz o handler '${handler}'; ação não reclassificada pelo texto` });
           }

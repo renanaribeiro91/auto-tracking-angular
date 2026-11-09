@@ -15,6 +15,9 @@ export interface FiredEventParams {
   readonly opcao_selecionada_1?: string;
 }
 
+/** Aba do que dispara na tela em que a pessoa está: serviço ou componente não é módulo do produto. */
+export const ORIGIN_MODULE = 'tela-de-origem';
+
 export interface FiredEvent {
   readonly modulo: string;
   readonly params: FiredEventParams;
@@ -28,7 +31,7 @@ export function firedEvents(entry: TagEntry, product: string): FiredEvent[] {
     const subfuncionalidade = screenRef ? subfuncionalidadeOf(funcionalidade!, nomeTela) : '{tela-de-origem}';
     const tela = `{ambiente}:${product}:${screenRef ? screenPath(funcionalidade!, nomeTela) : '{funcionalidade-de-origem}:{tela-de-origem}'}`;
     return {
-      modulo: funcionalidade ?? entry.funcionalidade,
+      modulo: funcionalidade ?? ORIGIN_MODULE,
       params: {
         ambiente: '{ambiente}',
         produto: product,

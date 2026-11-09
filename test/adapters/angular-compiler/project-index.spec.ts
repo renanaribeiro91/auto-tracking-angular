@@ -45,6 +45,20 @@ describe('AngularProjectIndexer', () => {
     }
   });
 
+  it('componente roteado que só embrulha o outlet é casca; com conteúdo próprio é tela', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-index-'));
+    try {
+      write(root, 'wrapper.component.ts', `@Component({ selector: 'app-w', template: '<div class="x"><ion-router-outlet></ion-router-outlet></div>' }) export class WrapperComponent {}`);
+      write(root, 'abas.page.ts', `@Component({ selector: 'app-a', template: '<ion-segment></ion-segment><ion-router-outlet></ion-router-outlet>' }) export class AbasPage {}`);
+      write(root, 'routes.ts', `import { WrapperComponent } from './wrapper.component'; import { AbasPage } from './abas.page'; export const routes = [{ path: 'w', component: WrapperComponent }, { path: 'a', component: AbasPage }];`);
+
+      const index = new AngularProjectIndexer().buildProjectIndex(root);
+      expect(index.shellComponents).toEqual(new Set([`${path.join(root, 'wrapper.component.ts')}#WrapperComponent`]));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rota-casca com filho de caminho vazio é casca; sem esse filho, a própria rota é destino', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'at-index-'));
     try {
