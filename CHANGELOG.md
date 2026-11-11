@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.0 — 2026-11-11
+
+- Texto vindo de input ligado a dado de runtime (`[textoLabel]="documento.nomeTipoDocumento"`, `[title]="item.titulo"`) é rótulo dinâmico: o runtime envia o valor exato da expressão (`[attr.data-at-label]`), sem depender de como o componente monta o DOM; a planilha mostra o nome do dado (`[nome-tipo-documento]`) ou `[rotulo-do-botao-exibido]` quando o campo é genérico.
+- Dado pessoal pelo significado do campo e do dono, não pela palavra: `nomeTipoDocumento`/`nomePlano` são nomes de coisas; nome sem qualificador, campo de entidade pessoa, endereço, valor, medida e arquivo enviado nunca viram rótulo.
+- Em componente com várias ações, o texto do host só nomeia a ação cujo gatilho o exibe (o input no template do componente ou o `<ng-content>`); lixeira, visualizar e editar mantêm o próprio nome.
+- Controle de escolha (`(onChange)`, `selectedText`, `placeholderText`) e literal sem texto (`null`) não viram rótulo dinâmico.
+- Componentes Ionic que agem sem handler são cliques: `ion-tab-button tab` (texto da aba), `ion-back-button` (`voltar`), `ion-menu-button`/`ion-menu-toggle` (`abrir-menu`). `ionTabsDidChange` continua fora: dispara também no carregamento e na troca por código.
+- Condicional sem texto dentro do elemento (borda da aba selecionada) não tira o texto fixo do rótulo.
+- `data-testid` que começa com o nome do próprio componente/página não vira objeto da ação; prefixo `acao`/`action` de output sai do rótulo.
+
 ## 2.4.0 — 2026-11-10
 
 - Escadinha pela rota em qualquer arquitetura Angular/Ionic (NgModule, standalone, lazy, constantes, barrel): `funcionalidade` é o 1º nível, `subfuncionalidade` o 2º e `tela` o caminho inteiro, com nome de produto (sem versão do código, tecnologia, estrutura de UI ou prefixo repetido do pai).

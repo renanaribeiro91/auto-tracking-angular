@@ -580,7 +580,9 @@ export class DomEventTracker {
     }
     // Rótulo dinâmico comprovado pelo CLI: o texto atual vence o fallback gravado no build.
     const dynamic = (hit.descriptor?.rotuloDinamico ?? hit.host.getAttribute('data-at-rotulo-dinamico')?.split('|'))?.includes(hit.id) ?? false;
-    const current = dynamic && labelSource ? DomEventTracker.currentLabel(labelSource) : '';
+    // Input ligado de componente (`[textoLabel]`) não está no DOM como atributo: o tagger expõe o valor exato em data-at-label.
+    const bound = hit.host.getAttribute('data-at-label');
+    const current = !dynamic ? '' : bound !== null ? DomEventTracker.publicLabel(bound) : labelSource ? DomEventTracker.currentLabel(labelSource) : '';
     if (dynamic && !proven && !current) {
       this.warnSafely(`[auto-tracking] rótulo público de '${hit.id}' indisponível; evento não enviado`);
       return;
@@ -858,6 +860,11 @@ export class DomEventTracker {
       const main = groups.get(null) ?? [...groups.values()].sort((a, b) => b.join(' ').length - a.join(' ').length)[0] ?? [];
       text = main.join(' ');
     }
+    return DomEventTracker.publicLabel(text);
+  }
+
+  /** Texto com e-mail ou documento/telefone nunca vira rótulo. */
+  private static publicLabel(text: string): string {
     return /@|\d(?:[.\-\/ ]?\d){5,}/.test(text) ? '' : labelSlug(text);
   }
 

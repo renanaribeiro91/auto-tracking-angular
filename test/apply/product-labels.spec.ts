@@ -61,6 +61,9 @@ describe('rótulo com visão de produto: nunca termo técnico, nunca repetido', 
     expect(rotulo('<ion-icon (click)="abrirModal()"></ion-icon>')).toBe('abrir');
     expect(rotulo('<ion-icon (click)="abrirExtrato()" data-testid="btn-outro"></ion-icon>')).toBe('abrir-extrato');
     expect(rotulo('<ion-icon (click)="fecharModal()" data-testid="btn-detalhes-close"></ion-icon>')).toBe('fechar');
+    // Id de teste que só repete o nome do próprio componente não é o objeto da ação.
+    expect(rotulo('<ion-icon (click)="onVisualizar()" data-testid="card-resumo-lista"></ion-icon>')).toBe('visualizar');
+    expect(rotulo('<ion-icon (click)="abrirModal()" data-testid="btn-resumo-confirmar-envio"></ion-icon>')).toBe('confirmar-envio');
   });
 
   it('sufixo de código Action no método não chega ao rótulo', () => {

@@ -170,6 +170,35 @@ export class TemplateAnalysis {
   }
 
   /** Resolve gestos DOM que emitem o output, incluindo métodos e componentes aninhados. */
+  /**
+   * Conteúdo dos elementos do template que o seletor de um gatilho aponta (`#id`, `tag.classe`, `tag[data-testid=x]`,
+   * `tag`, `:scope > tag`); `null` quando o seletor não tem forma conhecida ou não acha elemento.
+   */
+  triggerContent(component: ComponentDef, selector: string): string | null {
+    const parsed = /^(?::scope\s*>\s*)?([a-z][\w-]*)?(?:#([\w-]+))?((?:\.[\w-]+)*)(?:\[data-testid=([\w-]+)\])?$/i.exec(selector.trim());
+    if (!parsed || !(parsed[1] || parsed[2])) return null;
+    const [, tag, id, classes = '', testId] = parsed;
+    const template = component.template.replace(/<!--[\s\S]*?-->/g, ' ');
+    const contents = [...template.matchAll(START_TAG_PATTERN)].filter((node) => {
+      const attrs = this.parseAttrs(node[2] ?? '');
+      const own = (attrs.get('class') ?? '').split(/\s+/);
+      return (!tag || node[1]!.toLowerCase() === tag.toLowerCase()) && (!id || attrs.get('id') === id)
+        && classes.split('.').filter(Boolean).every((name) => own.includes(name)) && (!testId || attrs.get('data-testid') === testId);
+    }).map((node) => {
+      // Conteúdo até o fechamento correspondente, contando aninhamento da mesma tag.
+      const name = node[1]!.toLowerCase();
+      const pattern = new RegExp(`<(/?)${name}\\b[^>]*?(/?)>`, 'gi');
+      pattern.lastIndex = node.index! + node[0].length;
+      let depth = 1;
+      for (let match = pattern.exec(template); match; match = pattern.exec(template)) {
+        if (match[1]) depth--; else if (!match[2]) depth++;
+        if (depth === 0) return template.slice(node.index! + node[0].length, match.index);
+      }
+      return node[0].endsWith('/>') ? '' : null;
+    });
+    return contents.length && contents.every((content) => content !== null) ? contents.join('\n') : null;
+  }
+
   outputTriggers(component: ComponentDef, publicName: string, catalog: ComponentCatalog, depth = 0): OutputTrigger[] {
     const property = component.outputs.get(publicName) ?? publicName;
     const escapedProperty = property.replace(/\$/g, '\\$');

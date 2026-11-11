@@ -5,7 +5,7 @@ export const BACKWARD_ACTION = /\b(voltar|anterior|retornar|back|previous)/;
 /** Palavras de código (prefixos de teste, verbos de evento) que não descrevem a ação no rótulo. */
 export const TECHNICAL_LABEL_WORDS: ReadonlySet<string> = new Set([
   'btn', 'button', 'icon', 'ico', 'img', 'lnk', 'lbl', 'txt', 'chk', 'inp', 'testid', 'test', 'e2e',
-  'on', 'ao', 'handle', 'handler', 'action', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
+  'on', 'ao', 'handle', 'handler', 'action', 'acao', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
 ]);
 
 /** Mesmo vocabulário do runtime: a planilha e o envio limpam igual. */
@@ -16,6 +16,18 @@ export { UI_STRUCTURE_WORDS, ENGLISH_ACTIONS as ACTION_VERBS } from '../../domai
  * o texto visível não é enviado e o rótulo semântico da ação é usado.
  */
 export const PERSONAL_DATA_EXPRESSION = /(?:^|-)(?:nome|name|cpf|cnpj|rg|email|mail|telefone|celular|phone|fone|endereco|address|logradouro|cep|bairro|cidade|cartao|carteirinha|numero|number|matricula|beneficiario|titular|dependente|usuario|user|paciente|segurado|senha|password|token|protocolo|nascimento|idade|valor|saldo|preco|data|date|documento|placa|conta|agencia)(?:-|$)/;
+
+/** Dado que identifica alguém, é digitado/enviado pela pessoa ou é uma medida (distância, total): nunca vira rótulo. */
+export const PERSONAL_FIELD_WORDS: ReadonlySet<string> = new Set(['cpf', 'cnpj', 'rg', 'email', 'mail', 'telefone', 'celular', 'phone', 'fone',
+  'endereco', 'address', 'logradouro', 'cep', 'bairro', 'cidade', 'cartao', 'carteirinha', 'numero', 'number', 'matricula', 'senha', 'password',
+  'token', 'protocolo', 'nascimento', 'idade', 'valor', 'saldo', 'preco', 'data', 'date', 'documento', 'placa', 'conta', 'agencia',
+  'arquivo', 'file', 'anexo', 'foto', 'imagem', 'mensagem', 'comentario', 'observacao', 'apelido',
+  'distancia', 'quantidade', 'qtd', 'total', 'percentual', 'contador', 'count']);
+/** Entidade pessoa: o nome dela ou um campo dela sem significado de catálogo é dado pessoal. */
+export const PERSON_WORDS: ReadonlySet<string> = new Set(['beneficiario', 'titular', 'dependente', 'usuario', 'user', 'paciente', 'segurado',
+  'cliente', 'pessoa', 'mae', 'pai', 'conjuge', 'responsavel', 'contato', 'medico', 'profissional', 'prestador', 'social', 'completo', 'profile', 'perfil']);
+/** Palavra que torna o resto do campo uma classificação (`tipoDocumento`, `statusConta`): o valor é do catálogo, não da pessoa. */
+export const CLASSIFIER_WORDS: ReadonlySet<string> = new Set(['tipo', 'type', 'categoria', 'category', 'especie', 'modalidade', 'classe', 'status', 'situacao']);
 
 /** Output de navegação do próprio componente (voltar/fechar do header/modal). */
 export const COMPONENT_NAVIGATION_OUTPUT = /(?:^|-)(?:back|voltar|retornar|close|fechar|dismiss|cancel|cancelar)(?:-|$)/;
@@ -47,6 +59,11 @@ export const isInputField = (tag: string): boolean => {
 /** Eventos técnicos que não representam ação de negócio. */
 export const TECHNICAL_EVENT = /(blur|focus|input|keyup|keydown|keypress|paste|copy|cut|drop|scroll|refresh|infinite|dismiss|didenter|willenter|didleave|willleave|load|error|swipe|touch|drag|hover|mouse|contextmenu|outputform|valuechange|ngmodelchange|animation|transition|resize|init|destroy|ready|ionselect|formchange|formvalid|onvalid|onmonthchange|(?:opened|closed)modal)/i;
 
+/** Componentes Ionic que agem sozinhos ao toque, sem handler no template, e o nome da ação quando não há texto. */
+export const IONIC_OWN_ACTION: Readonly<Record<string, string>> = {
+  'ion-back-button': 'voltar', 'ion-menu-button': 'abrir-menu', 'ion-menu-toggle': 'abrir-menu',
+};
+
 /** Controles cujo evento de mudança deve ser tratado como seleção. */
 export const CHANGE_CONTROL_TAGS: ReadonlySet<string> = new Set([
   'ion-select', 'select', 'ion-checkbox', 'ion-toggle', 'ion-radio-group', 'ion-segment', 'ion-range', 'ion-datetime',
@@ -54,8 +71,8 @@ export const CHANGE_CONTROL_TAGS: ReadonlySet<string> = new Set([
 
 /** Atributos/inputs cujo valor é o texto exibido do controle, em ordem de prioridade (exato: `headerTexto` descreve outro conteúdo). */
 export const LABEL_ATTRIBUTES = ['aria-label', 'label', 'title', 'texto', 'text', 'titulo', 'rotulo'] as const;
-/** Input composto que nomeia o controle (`tabTitle`, `buttonLabel`); só vale com gesto único; cabeçalho, subtítulo e botões internos (`okText`) descrevem outro conteúdo. */
-export const COMPOUND_LABEL_INPUT = /^(?!header|cabecalho|sub|ok|cancel|confirm|done|close|clear|err|help|ajuda)[a-z]\w*(?:Title|Titulo|Label|Text|Texto)$/;
+/** Input composto que nomeia o controle (`tabTitle`, `buttonLabel`); só vale com gesto único; cabeçalho, subtítulo, botões internos (`okText`) e valor escolhido (`selectedText`, `placeholderText`) descrevem outro conteúdo. */
+export const COMPOUND_LABEL_INPUT = /^(?!header|cabecalho|sub|ok|cancel|confirm|done|close|clear|err|help|ajuda|selected|selecionad|value|valor|placeholder|search|busca|empty|vazio|hint)[a-z]\w*(?:Title|Titulo|Label|Text|Texto)$/;
 /** Os mesmos atributos na forma ligada (`[attr.x]`/`[x]`). */
 export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMap((name) => [`[attr.${name}]`, `[${name}]`]);
 
@@ -63,7 +80,7 @@ export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMa
 /** Verbos que só dizem algo com o objeto: sozinhos (`mostraModal` sem o `modal`) não nomeiam a ação. */
 export const OBJECT_VERBS: ReadonlySet<string> = new Set(['abrir', 'abre', 'mostrar', 'mostra', 'exibir', 'exibe', 'ver', 'visualizar', 'apresentar']);
 
-export const GENERIC_ELEMENT_LABEL = /^(?:link|botao|button|item|card|elemento|opcao|option|acao|action)$/;
+export const GENERIC_ELEMENT_LABEL = /^(?:link|botao|button|item|card|elemento|opcao|option|acao|action|lista|list)$/;
 
 /** Controles cujo conteúdo são as opções (o valor escolhido), nunca o nome do controle. */
 export const OPTION_CONTAINER_TAGS: ReadonlySet<string> = new Set(['select', 'ion-select', 'ion-radio-group', 'ion-segment']);

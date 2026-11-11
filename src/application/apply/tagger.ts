@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, IONIC_OWN_ACTION, PERSONAL_DATA_EXPRESSION, PERSONAL_FIELD_WORDS, PERSON_WORDS, CLASSIFIER_WORDS, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentDef, ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { joinLabel, labelSlug, MAX_PROVEN_LABEL, productLabel, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -180,7 +180,8 @@ export class TemplateTagger {
     if (OPTION_CONTAINER_TAGS.has(tag)) return '';
     // conteúdo até o fechamento do próprio elemento, sem tags filhas (ion-label, span, ion-icon)
     const close = html.indexOf(`</${tag}`, tagEnd);
-    const inner = html.slice(tagEnd, close === -1 ? html.indexOf('<', tagEnd) : close);
+    // Condicional sem texto (borda da aba selecionada, ícone) não muda o que a pessoa lê.
+    const inner = this.withoutEmptyConditionals(html.slice(tagEnd, close === -1 ? html.indexOf('<', tagEnd) : close));
     // Aspas protegem '>' de expressões Angular ([enable]="n > 0") dentro das tags.
     const raw = inner.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' ');
     // blocos de controle (@if, @for, @else…) e URLs não são texto visível de negócio
@@ -200,14 +201,20 @@ export class TemplateTagger {
     return nested.size === 1 ? [...nested][0]! : '';
   }
 
+  private withoutEmptyConditionals(inner: string): string {
+    const attrs = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+    return inner
+      .replace(new RegExp(`<([a-zA-Z][\\w-]*)\\b${attrs}\\*ngIf${attrs}(?:/>|>(?:\\s|<(?:[^>"']|"[^"]*"|'[^']*')*>)*</\\1\\s*>)`, 'g'), ' ')
+      .replace(/@if\s*\([^)]*\)\s*\{(?:\s|<(?:[^>"'{}]|"[^"]*"|'[^']*')*>)*\}/g, ' ');
+  }
+
   /**
    * Expressão que produz o texto visível (interpolação ou [label]/[title]/[aria-label]
    * ligado a variável). `null` quando não há expressão ou quando o nome indica dado
    * pessoal/de negócio: nesse caso o texto nunca é lido e o rótulo semântico vale.
    */
   private dynamicLabelSource(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext): string | null {
-    const bound = BOUND_LABEL_ATTRIBUTES
-      .map((name) => attrs.get(name)).filter((value): value is string => !!value?.trim() && this.stringLiteral(value) === undefined && !this.technicalBinding(value, ctx));
+    const bound = this.boundLabelExpressions(attrs, ctx);
     const close = html.indexOf(`</${tag}`, tagEnd);
     const inner = close === -1 || OPTION_CONTAINER_TAGS.has(tag)
       ? '' : html.slice(tagEnd, close).replace(/<!--[\s\S]*?-->/g, ' ');
@@ -216,8 +223,31 @@ export class TemplateTagger {
     if (!bound.length && interpolations.length > 1 && !this.withoutChildren(inner).includes('{{')) return null;
     const expressions = [...bound, ...interpolations];
     if (!expressions.length) return /@(?:if|switch)\b|\*ngIf\b/.test(inner) ? 'conditional-text' : null;
-    if (expressions.some((expression) => PERSONAL_DATA_EXPRESSION.test(this.words(expression)))) return null;
+    if (expressions.some((expression) => this.personalExpression(expression))) return null;
     return expressions[0]!;
+  }
+
+  /**
+   * Dado pessoal pelo significado de cada caminho da expressão (`dono.campo`), não pela presença de uma palavra:
+   * `documento.nomeTipoDocumento` é o nome de um tipo do catálogo; `beneficiario.nome`, `x.name` sem dono conhecido,
+   * `usuario.apelido` e `item.valor` são dados da pessoa. Na dúvida (nome sem qualificador) é pessoal.
+   */
+  private personalExpression(expression: string): boolean {
+    const code = expression.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, ' ');
+    return [...code.matchAll(/[A-Za-z_$][\w$]*(?:\s*[?!]?\.\s*[A-Za-z_$][\w$]*)*/g)].some(([chain]) => {
+      // Plural (`beneficiarios`) tem o significado do singular.
+      const is = (set: ReadonlySet<string>, word: string): boolean => set.has(word) || set.has(word.replace(/s$/, ''));
+      const segments = chain.split(/\s*[?!]?\.\s*/).map((segment) => this.words(segment).split('-').filter(Boolean));
+      const field = segments.pop()!.filter((word, index) => index || !['get', 'obter'].includes(word));
+      const cut = field.findIndex((word) => is(CLASSIFIER_WORDS, word));
+      const own = cut < 0 ? field : field.slice(0, cut);
+      if (own.some((word) => is(PERSONAL_FIELD_WORDS, word) || is(PERSON_WORDS, word))) return true;
+      // Nome qualificado por algo que não é pessoa (`nomePlano`, `nomeTipoDocumento`) é nome de coisa.
+      if (['nome', 'name'].includes(own[0] ?? '')) return own.length === 1 && cut < 0;
+      // Dono é a própria pessoa ou um dado pessoal (`beneficiario.apelido`, `endereco.descricao`), não um nome que só
+      // contém a palavra (`alterarDadosContato.label` é um botão).
+      return cut < 0 && segments.some(([first]) => !!first && (is(PERSON_WORDS, first) || is(PERSONAL_FIELD_WORDS, first)));
+    });
   }
 
   /** Escolha de um item repetido: o gesto recebe o próprio item e seu valor público é exibido. */
@@ -284,6 +314,21 @@ export class TemplateTagger {
    * (`nomeEspecialidade`); campo genérico (`name`, `titulo`…) recebe o objeto do
    * handler de seleção (`selecionarSala` → `[nome-sala-selecionado]`).
    */
+  /**
+   * Nome do dado que o rótulo exibe (`doc.nomeTipoDocumento` → `[nome-tipo-documento]`). Só um caminho simples de
+   * propriedade nomeia o dado; ternário, chamada, concatenação, campo genérico, booleano ou chave de texto ficam no padrão.
+   */
+  private dynamicPlaceholder(source: string): string {
+    const path = /^\s*[\w$]+(?:\s*[?!]?\.\s*[\w$]+)*\s*$/.exec(source)?.[0].trim();
+    const field = path?.split(/\s*[?!]?\.\s*/).pop() ?? '';
+    const words = this.words(field).split('-');
+    // `apiTexto`, `botaoLabel`, `item`, `isLastSlide`: o campo não diz qual dado é.
+    const generic = !field || /^[A-Z0-9_]+$/.test(field) || /^(?:is|has|can|should|show|mostrar|exibir)$/.test(words[0] ?? '')
+      || /^(?:label|title|titulo|text|texto|rotulo|descricao|description|nome|name|value|valor|item|key|chave|botao|button|link|opcao|option|data|conteudo)$/.test(words.at(-1) ?? '')
+      || /\d$/.test(field);
+    return generic ? '[rotulo-do-botao-exibido]' : `[${words.join('-')}]`;
+  }
+
   private optionPlaceholder(field: string, click: string, item: string): string {
     if (!/^(?:name|nome|label|title|titulo|text|texto)$/i.test(field)) return `[${this.words(field)}-selecionado]`;
     // Remove prefixo de evento, o verbo e preposições: `onSelecionarSala`/`irPara` → objeto da ação, ou o próprio item.
@@ -398,11 +443,25 @@ export class TemplateTagger {
       const bound = attrs.get(`[attr.${name}]`) ?? attrs.get(`[${name}]`);
       return bound === undefined ? undefined : this.stringLiteral(bound);
     };
-    const singleGesture = [...attrs.keys()].filter((name) => name.startsWith('(') && !TECHNICAL_EVENT.test(name)).length === 1;
-    const compound = !singleGesture ? [] : [...attrs].filter(([name]) => COMPOUND_LABEL_INPUT.test(name.replace(/^\[|\]$/g, '')))
+    const compound = !this.singleGesture(attrs) ? [] : [...attrs].filter(([name]) => COMPOUND_LABEL_INPUT.test(name.replace(/^\[|\]$/g, '')))
       .map(([name, value]) => (name.startsWith('[') ? this.stringLiteral(value) : value));
     return [...LABEL_ATTRIBUTES.flatMap((name) => [literal(name), attrs.get(name)]), ...compound]
       .filter((value): value is string => !!value?.trim());
+  }
+
+  private singleGesture(attrs: ReadonlyMap<string, string>): boolean {
+    return [...attrs.keys()].filter((name) => name.startsWith('(') && !TECHNICAL_EVENT.test(name)).length === 1;
+  }
+
+  /** Expressões ligadas que dão o texto do controle (`[title]`, `[attr.aria-label]` e, com gesto único, `[textoLabel]`), em ordem de prioridade. */
+  private boundLabelExpressions(attrs: ReadonlyMap<string, string>, ctx: TagContext): string[] {
+    // Em controle de escolha o texto exibido é o valor escolhido, que vai na opção, nunca no rótulo.
+    const choice = [...attrs.keys()].some((name) => /^\((?:\w*change|ionchange|\w*select\w*)\)$/i.test(name));
+    const compound = !this.singleGesture(attrs) || choice ? [] : [...attrs]
+      .filter(([name]) => /^\[[\w$]+\]$/.test(name) && COMPOUND_LABEL_INPUT.test(name.slice(1, -1))).map(([, value]) => value);
+    return [...BOUND_LABEL_ATTRIBUTES.map((name) => attrs.get(name)), ...compound]
+      .filter((value): value is string => !!value?.trim() && !/^\s*(?:null|undefined|true|false|-?\d[\d.]*)\s*$/.test(value)
+        && this.stringLiteral(value) === undefined && !this.technicalBinding(value, ctx));
   }
 
   /** `'icon-star-ranking-' + index` → 'icon-star-ranking-': a parte fixa identifica o elemento repetido. */
@@ -483,6 +542,19 @@ export class TemplateTagger {
     return fromHandler;
   }
 
+  /** Id de teste como objeto da ação, sem o nome do próprio componente/página, que identifica o componente e não a ação. */
+  private actionTestId(attrs: ReadonlyMap<string, string>, ctx: TagContext): string | undefined {
+    const testId = this.testId(attrs);
+    const own = /([^/]+?)(?:\.(?:component|page|modal|dialog))?\.html$/.exec(ctx.relFile)?.[1];
+    if (!testId || !own) return testId;
+    // Prefixo de tipo (`btn-`, `icon-`) vem antes do nome do componente no id de teste.
+    const words = this.words(testId).split('-').filter((word, index, all) => all.slice(0, index + 1).some((item) => !TECHNICAL_LABEL_WORDS.has(item))).join('-');
+    const prefix = this.words(own);
+    if (words !== prefix && !words.startsWith(`${prefix}-`)) return testId;
+    // Só o nome do componente: é melhor que um verbo genérico (`aoClicarBotao` → `botao`).
+    return words.slice(prefix.length + 1) || testId;
+  }
+
   /** Identificador técnico já presente no elemento (aria-label de teste ou data-testid). */
   private testId(attrs: ReadonlyMap<string, string>): string | undefined {
     const bound = attrs.get('[attr.data-testid]');
@@ -533,9 +605,21 @@ export class TemplateTagger {
     return html.replace(/<!--[\s\S]*?-->/g, (c) => c.replace(/[^\n]/g, ' '));
   }
 
-  private isNavigation(attrs: ReadonlyMap<string, string>): boolean {
+  private isNavigation(tag: string, attrs: ReadonlyMap<string, string>): boolean {
     const href = attrs.get('href');
-    return attrs.has('routerLink') || attrs.has('[routerLink]') || (href !== undefined && href !== '' && href !== '#' && !href.startsWith('javascript:'));
+    return attrs.has('routerLink') || attrs.has('[routerLink]') || !!this.ionicOwnAction(tag, attrs)
+      || (href !== undefined && href !== '' && href !== '#' && !href.startsWith('javascript:'));
+  }
+
+  /** `<ion-tab-button tab>` troca de aba sozinho, sem handler: o toque é a navegação. */
+  private isTabNavigation(tag: string, attrs: ReadonlyMap<string, string>): boolean {
+    return tag === 'ion-tab-button' && (attrs.has('tab') || attrs.has('[tab]'));
+  }
+
+  /** Ação própria do componente Ionic que age sem handler (`ion-back-button` volta, `ion-menu-button` abre o menu); `undefined` nos demais. */
+  private ionicOwnAction(tag: string, attrs: ReadonlyMap<string, string>): string | undefined {
+    if (this.isTabNavigation(tag, attrs)) return 'navegar';
+    return IONIC_OWN_ACTION[tag];
   }
 
   private isCustomElement(tag: string): boolean {
@@ -766,9 +850,16 @@ export class TemplateTagger {
       const label = productLabel(slug(visibleLabel, MAX_PROVEN_LABEL)) || (proven.length === 1 ? proven[0]! : '');
       const rotulos = proven.length > 1 ? proven : [];
       // Texto de menu/serviço muda sem novo build: o runtime lê o valor visível no clique.
-      const boundLabel = BOUND_LABEL_ATTRIBUTES
-        .some((name) => attrs.has(name) && this.stringLiteral(attrs.get(name)!) === undefined && !this.technicalBinding(attrs.get(name)!, ctx));
-      const dynamicSource = (label && !boundLabel) || proven.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs, ctx);
+      const boundLabels = this.boundLabelExpressions(attrs, ctx);
+      const dynamicSource = (label && !boundLabels.length) || proven.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs, ctx);
+      // Input ligado não aparece no DOM do componente como atributo: o runtime lê o valor exato da expressão.
+      // Nome do input do componente que traz o texto (`textoLabel` em `[textoLabel]`), quando o texto vem de input.
+      const labelInput = dynamicSource && boundLabels.includes(dynamicSource)
+        ? /^\[(?:attr\.)?([\w$]+)\]$/.exec([...attrs].find(([name, value]) => value === dynamicSource && !name.includes('data-at-'))?.[0] ?? '')?.[1] : undefined;
+      if (dynamicSource && boundLabels.includes(dynamicSource)) {
+        desired.set('[attr.data-at-label]', dynamicSource);
+        derived.add('[attr.data-at-label]');
+      }
       const dynamicIds: string[] = [];
       const selectionSource = this.listSelection(html, tag, tagEnd, attrs, ctx);
       if (selectionSource === undefined) diagnostics.push({ code: 'OPTION_PUBLIC_VALUE_UNPROVEN', arquivo: ctx.relFile, linha,
@@ -784,7 +875,7 @@ export class TemplateTagger {
       // Campo público comprovado nomeia o valor; sem ele, o significado genérico.
       const optionSheet = selectionSource ? this.optionPlaceholder(selectionSource.split('.')[1] ?? 'nome', [...attrs].find(([name]) => name.startsWith('('))?.[1] ?? '', selectionSource.split('.')[0]!) : '[valor-selecionado]';
       // Planilha registra o significado do valor dinâmico, nunca a expressão de código.
-      const sheetLabel = (rotulo: string, dynamic: boolean): string => dynamic ? '[rotulo-do-botao-exibido]' : rotulo;
+      const sheetLabel = (rotulo: string, dynamic: boolean): string => dynamic ? this.dynamicPlaceholder(dynamicSource ?? '') : rotulo;
       if (rotulos.length && ctx.mode !== 'ref') {
         desired.set('data-at-rotulos', rotulos.join('|'));
         derived.add('data-at-rotulos');
@@ -805,16 +896,16 @@ export class TemplateTagger {
       // Um único evento por gesto: o uso (com o handler de negócio) representa o repasse sem texto.
       const domBinding = ownBinding && ctx.self && this.analysis.usageGesture(ctx.self, tag, attrs, html, m.index!, attrs.get(ownBinding)!)
         ? undefined : ownBinding;
-      const navigation = trackable && !domBinding && this.isNavigation(attrs);
+      const navigation = trackable && !domBinding && this.isNavigation(tag, attrs);
       if (domBinding || navigation) {
         const expr = domBinding ? attrs.get(domBinding)! : '';
-        const handler = domBinding ? this.analysis.handlerName(expr) : 'navegar';
+        const handler = domBinding ? this.analysis.handlerName(expr) : this.ionicOwnAction(tag, attrs) ?? 'navegar';
         const selectionInput = domBinding === '(click)' ? ctx.selectionMethods?.get(handler) : undefined;
         if (label && this.labelBehaviorConflict(label, handler)) {
           diagnostics.push({ code: 'VISIBLE_LABEL_BEHAVIOR_CONFLICT', arquivo: ctx.relFile, linha, mensagem: `texto '${label}' contradiz o handler '${handler}'; ação não reclassificada pelo texto` });
         }
         const event = domBinding === '(ngSubmit)' || domBinding === '(submit)' ? 'submit' : domBinding === '(change)' ? 'change' : domBinding === '(ionChange)' || CHANGE_CONTROL_TAGS.has(tag) ? 'ionChange' : 'click';
-        const name = this.shortName(slug(label) || this.actionName(handler, expr, this.testId(attrs))) || this.elementoFor(tag, attrs);
+        const name = this.shortName(slug(label) || this.actionName(handler, expr, this.actionTestId(attrs, ctx))) || this.elementoFor(tag, attrs);
         // Mesmo host e mesma ação comprovada podem migrar do @Output do
         // componente para o evento DOM sem criar uma nova identidade "-2".
         const solePriorOutput = prior?.outputs?.length === 1 && !prior.click ? prior.outputs[0] : undefined;
@@ -851,7 +942,7 @@ export class TemplateTagger {
           desired.set('data-at-event', event);
           derived.add('data-at-event');
         }
-        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos, ...byScreen } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
+        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos, ...byScreen } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? (this.ionicOwnAction(tag, attrs) ? `<${tag}>` : 'routerLink'), linha }, ctx, funcionalidade, tela));
       }
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
@@ -899,10 +990,19 @@ export class TemplateTagger {
           // componente: voltar/fechar do header usa a ação, nunca o título da tela.
           const navigation = COMPONENT_NAVIGATION_OUTPUT.test(this.words(this.withoutTagPrefix(output, tag)));
           const ownLabel = navigation ? '' : label;
-          const dynamicLabel = !!dynamicSource && !navigation;
-          const name = this.shortName(slug(ownLabel) || this.actionName(handler, expr, this.testId(attrs), this.withoutTagPrefix(output, tag))) || this.elementoFor(tag, attrs, output);
+          const name = this.shortName(slug(ownLabel) || this.actionName(handler, expr, this.actionTestId(attrs, ctx), this.withoutTagPrefix(output, tag))) || this.elementoFor(tag, attrs, output);
           const activeOutputs = [...attrs.keys()].filter((attribute) => /^\(([\w.$]+)\)$/.test(attribute) &&
             !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
+          // O texto do host nomeia só a ação cujo gatilho o exibe: lixeira, visualizar e incluir dentro de um card com
+          // título são ações distintas e mantêm o próprio nome.
+          const shows = uniqueTriggers.every((trigger) => {
+            if (trigger.selector === ':host') return true;
+            const content = this.analysis.triggerContent(def, trigger.selector);
+            if (content === null) return false;
+            // Input ligado (`[textoLabel]`) aparece no gatilho; texto projetado chega pelo <ng-content>.
+            return labelInput ? new RegExp(`\\{\\{[^}]*\\b${labelInput}\\b[^}]*\\}\\}|="[^"]*\\b${labelInput}\\b[^"]*"`).test(content) : /<ng-content\b/.test(content);
+          });
+          const dynamicLabel = !!dynamicSource && !navigation && shows;
           // Ações distintas do mesmo componente (ver, excluir) não podem chegar iguais ao Firebase.
           const verb = activeOutputs.length > 1 && ownLabel && !dynamicLabel && !rotulos.length
             ? slug(this.semanticWords(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action)-/, '').replace(/^[a-z]+/, (word) => ACTION_VERBS.get(word) ?? word)) : '';
@@ -940,6 +1040,9 @@ export class TemplateTagger {
       }
 
       if (dynamicSource && desired.has('data-at-id')) dynamicIds.unshift(desired.get('data-at-id')!);
+      // Valor ligado só serve a um evento com rótulo dinâmico neste elemento.
+      if (!dynamicIds.length) { desired.delete('[attr.data-at-label]'); derived.delete('[attr.data-at-label]'); }
+      const labelBinding = desired.get('[attr.data-at-label]');
       if (dynamicIds.length && ctx.mode !== 'ref') {
         desired.set('data-at-rotulo-dinamico', dynamicIds.join('|'));
         derived.add('data-at-rotulo-dinamico');
@@ -987,10 +1090,11 @@ export class TemplateTagger {
         derived.clear();
         derived.add('data-at-ref');
         if (selectionSource) { desired.set('[attr.data-at-option]', selectionSource); derived.add('[attr.data-at-option]'); }
+        if (labelBinding) { desired.set('[attr.data-at-label]', labelBinding); derived.add('[attr.data-at-label]'); }
       }
       // Opção sem evento comprovado no próprio elemento seria um atributo órfão.
       if (!entries.slice(entryStart).some((entry) => entry.evento === 'click')) {
-        for (const name of ['[attr.data-at-option]', 'data-at-option-allowed']) { desired.delete(name); derived.delete(name); }
+        for (const name of ['[attr.data-at-option]', 'data-at-option-allowed', '[attr.data-at-label]']) { desired.delete(name); derived.delete(name); }
       }
       // Substitui o output no mesmo lugar: a compactação não deve reordenar
       // os outros atributos da tag nem produzir diffs sem significado.
@@ -1007,7 +1111,7 @@ export class TemplateTagger {
       // são reconciliados normalmente, preservando valores manuais.
       for (const k of originalAttrs.keys()) {
         if (outputReplaced.has(k)) continue;
-        if (!k.startsWith('data-at-') && k !== '[attr.data-at-option]') continue;
+        if (!k.startsWith('data-at-') && k !== '[attr.data-at-option]' && k !== '[attr.data-at-label]') continue;
         const stale = !desired.has(k) || (derived.has(k) && originalAttrs.get(k) !== desired.get(k));
         if (!stale) continue;
         const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
