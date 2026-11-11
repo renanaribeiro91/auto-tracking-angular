@@ -9,6 +9,10 @@
 - Componentes Ionic que agem sem handler são cliques: `ion-tab-button tab` (texto da aba), `ion-back-button` (`voltar`), `ion-menu-button`/`ion-menu-toggle` (`abrir-menu`). `ionTabsDidChange` continua fora: dispara também no carregamento e na troca por código.
 - Condicional sem texto dentro do elemento (borda da aba selecionada) não tira o texto fixo do rótulo.
 - `data-testid` que começa com o nome do próprio componente/página não vira objeto da ação; prefixo `acao`/`action` de output sai do rótulo.
+- Dado pessoal decidido pelo **tipo declarado** do dono (interface, `type`, classe, `extends`, `signal<T>`/`input<T>`/`Observable<T>`, arrays, imports relativos, variável de laço resolvida pela lista): entidade com documento, nascimento ou contato é pessoa; o resto é coisa (`select.model.model.id.name` de um tipo sem esses campos é texto do produto). Sem tipo declarado, vale o significado das palavras.
+- Escolha em laço (`*ngFor` no elemento ou no pai, `@for`, aninhados, lidos de signal ou com pipe): com verbo de escolha (`selecionar`, `escolher`, `marcar`, `filtrar`…), o rótulo é a ação e o item vai em `opcao_selecionada_1` (`selecionar-agenda` + horário); um menu (`abrir(item)`) continua com o texto do item no rótulo. Caminho aninhado do item (`item.value.descricao`) é aceito; item com dado pessoal é decidido (sem opção, sem aviso).
+- A planilha nomeia a opção pelo objeto do handler ou pelo item da lista no singular, sem palavra de código ou de UI (`[nome-unidade-selecionado]`).
+- Gesto sem evento comprovado nunca grava opção ou valor exibido órfão (antes podia gerar contrato vazio).
 
 ## 2.4.0 — 2026-11-10
 

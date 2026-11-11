@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
 import { listItemFields, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
+import { typeFields } from './type-fields.js';
 import { routeDataLabels } from './route-data.js';
 import { staticNestedLabels } from './static-values.js';
 import { ComponentScreenResolver } from './component-screen-resolver.js';
@@ -366,6 +367,7 @@ export class TrackingPipeline {
           displayTexts: (expression) => index.displayTexts?.(t.c.key, expression) ?? null,
           routeLabels: routeLabelsOf(t.c),
           listItemFields: listItemFields(t.c),
+          typeFields: typeFields(t.c),
           usedIds,
           claimedIds,
           attrQuote: t.inline?.quote === '"' ? "'" : '"',

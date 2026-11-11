@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, IONIC_OWN_ACTION, PERSONAL_DATA_EXPRESSION, PERSONAL_FIELD_WORDS, PERSON_WORDS, CLASSIFIER_WORDS, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, IONIC_OWN_ACTION, PERSONAL_DATA_EXPRESSION, PERSONAL_FIELD_WORDS, PERSON_WORDS, PERSON_IDENTIFIER_WORDS, CLASSIFIER_WORDS, CHOICE_VERBS, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentDef, ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { joinLabel, labelSlug, MAX_PROVEN_LABEL, productLabel, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -66,6 +66,8 @@ export interface TagContext {
   readonly routeLabels?: (member: string, field?: string) => ReadonlyMap<string, readonly string[]> | null;
   /** Campos do tipo declarado do item de uma lista da classe; `null` sem prova do tipo. */
   readonly listItemFields?: (list: string) => readonly string[] | null;
+  /** Campos do tipo declarado de um caminho do componente (`agendas.horas`); `null` sem tipo declarado. */
+  readonly typeFields?: (ownerPath: string) => readonly string[] | null;
   /** ids já usados no projeto; recebe os novos ids gerados */
   readonly usedIds: Set<string>;
   /** Identidades já atribuídas nesta análise, distintas das reservas prévias. */
@@ -223,8 +225,18 @@ export class TemplateTagger {
     if (!bound.length && interpolations.length > 1 && !this.withoutChildren(inner).includes('{{')) return null;
     const expressions = [...bound, ...interpolations];
     if (!expressions.length) return /@(?:if|switch)\b|\*ngIf\b/.test(inner) ? 'conditional-text' : null;
-    if (expressions.some((expression) => this.personalExpression(expression))) return null;
+    if (expressions.some((expression) => this.personalExpression(expression, this.ownerFieldsResolver(html.slice(0, tagEnd), attrs, ctx)))) return null;
     return expressions[0]!;
+  }
+
+  /** Campos do tipo do dono de um caminho do template: variável de laço vira o caminho da lista no componente. */
+  private ownerFieldsResolver(before: string, attrs: ReadonlyMap<string, string>, ctx: TagContext): ((owner: readonly string[]) => readonly string[] | null) | undefined {
+    if (!ctx.typeFields) return undefined;
+    return ([root, ...rest]) => {
+      if (!root) return null;
+      const list = this.loopSource(before, attrs.get('*ngFor'), root);
+      return ctx.typeFields!([list ?? root, ...rest].join('.'));
+    };
   }
 
   /**
@@ -232,31 +244,48 @@ export class TemplateTagger {
    * `documento.nomeTipoDocumento` é o nome de um tipo do catálogo; `beneficiario.nome`, `x.name` sem dono conhecido,
    * `usuario.apelido` e `item.valor` são dados da pessoa. Na dúvida (nome sem qualificador) é pessoal.
    */
-  private personalExpression(expression: string): boolean {
+  private personalExpression(expression: string, ownerFields?: (owner: readonly string[]) => readonly string[] | null): boolean {
     const code = expression.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, ' ');
     return [...code.matchAll(/[A-Za-z_$][\w$]*(?:\s*[?!]?\.\s*[A-Za-z_$][\w$]*)*/g)].some(([chain]) => {
       // Plural (`beneficiarios`) tem o significado do singular.
       const is = (set: ReadonlySet<string>, word: string): boolean => set.has(word) || set.has(word.replace(/s$/, ''));
-      const segments = chain.split(/\s*[?!]?\.\s*/).map((segment) => this.words(segment).split('-').filter(Boolean));
+      const raw = chain.split(/\s*[?!]?\.\s*/).filter((segment) => segment !== 'this');
+      const segments = raw.map((segment) => this.words(segment).split('-').filter(Boolean));
       const field = segments.pop()!.filter((word, index) => index || !['get', 'obter'].includes(word));
       const cut = field.findIndex((word) => is(CLASSIFIER_WORDS, word));
       const own = cut < 0 ? field : field.slice(0, cut);
       if (own.some((word) => is(PERSONAL_FIELD_WORDS, word) || is(PERSON_WORDS, word))) return true;
+      const named = ['nome', 'name'].includes(own[0] ?? '');
+      // Tipo declarado do dono decide: entidade com documento, nascimento ou contato é pessoa; o resto é coisa.
+      const fields = raw.length > 1 ? ownerFields?.(raw.slice(0, -1)) : null;
+      if (fields) {
+        const person = fields.some((name) => this.words(name).split('-').some((word) => PERSON_IDENTIFIER_WORDS.has(word)));
+        return person && cut < 0 && (!named || own.length === 1);
+      }
       // Nome qualificado por algo que não é pessoa (`nomePlano`, `nomeTipoDocumento`) é nome de coisa.
-      if (['nome', 'name'].includes(own[0] ?? '')) return own.length === 1 && cut < 0;
+      if (named) return own.length === 1 && cut < 0;
       // Dono é a própria pessoa ou um dado pessoal (`beneficiario.apelido`, `endereco.descricao`), não um nome que só
       // contém a palavra (`alterarDadosContato.label` é um botão).
       return cut < 0 && segments.some(([first]) => !!first && (is(PERSON_WORDS, first) || is(PERSONAL_FIELD_WORDS, first)));
     });
   }
 
+  /** Handler que escolhe um valor (`selecionarAgenda`, `escolherPlano`, `onSelect`), não que abre um destino. */
+  private choiceHandler(expression: string): boolean {
+    return CHOICE_VERBS.has(this.semanticWords(this.analysis.handlerName(expression), false).split('-')[0] ?? '');
+  }
+
   /** Escolha de um item repetido: o gesto recebe o próprio item e seu valor público é exibido. */
-  private listSelection(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext): string | null | undefined {
-    const loop = /^\s*let\s+([\w$]+)\s+of\s+(?:this\.)?([\w$]+)\s*(?:[;,]|$)/.exec(attrs.get('*ngFor') ?? '');
-    if (!loop) return null;
-    const [, item, list] = loop;
+  private listSelection(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext, before: string): string | null | undefined {
     // Qualquer gesto (DOM ou output) que recebe o item, ou um campo dele, escolhe esse item da lista.
     const gestures = [...attrs].filter(([name]) => /^\((?!keydown|keyup|keypress|focus|blur|mouse|touch|pointer|scroll)[\w.]+\)$/.test(name));
+    // O item é a variável do laço (`*ngFor` no elemento ou `@for`/`*ngFor` em volta, inclusive aninhado) que o gesto recebe.
+    const own = /^\s*let\s+([\w$]+)\s+of\s+/.exec(attrs.get('*ngFor') ?? '')?.[1];
+    const roots = own ? [own] : [...new Set(gestures.flatMap(([, expression]) => [...expression.matchAll(/[(,]\s*([A-Za-z_$][\w$]*)/g)].map((match) => match[1]!)))];
+    const item = roots.find((root) => this.loopSource(before, attrs.get('*ngFor'), root));
+    // Laço em volta (`@for`, `*ngFor` no pai) só é escolha com verbo de escolha: `abrir(item)` de um menu é destino.
+    if (!item || (!own && !gestures.some(([, expression]) => this.choiceHandler(expression)))) return null;
+    const list = this.loopSource(before, attrs.get('*ngFor'), item)!;
     const receives = gestures.filter(([, expression]) => {
       const source = ts.createSourceFile('gesture.ts', expression, ts.ScriptTarget.Latest, true);
       let found = false;
@@ -283,12 +312,16 @@ export class TemplateTagger {
     let unproven = false;
     for (const expression of expressions) {
       if (new RegExp(`^\\s*${item!.replace(/\$/g, '\\$')}\\s*$`).test(expression)) return item!;
-      for (const match of expression.matchAll(/\b([\w$]+)\.([\w$]+)\b/g)) if (match[1] === item) {
-        const field = match[2]!;
+      // `item.campo` ou caminho aninhado (`item.value.descricao` do keyvalue): o campo é o último nível.
+      for (const match of expression.matchAll(/(?<![\w$.])([\w$]+)((?:\s*\??\.\s*[\w$]+)+)/g)) if (match[1] === item) {
+        const pathOf = `${item}${match[2]!.replace(/[\s?]/g, '')}`;
+        const field = pathOf.split('.').pop()!;
         const known = ctx.listLabels?.(list!, field);
+        // Valor constante do código nunca é pessoal; fora dele, dado pessoal é decisão, não dúvida: a opção não sai.
+        if (!known?.length && this.personalExpression(pathOf, this.ownerFieldsResolver(html.slice(0, tagEnd), attrs, ctx))) continue;
         if (known?.length || /^(?:label|title|titulo|text|texto|rotulo|descricao|description|nome|name)$/.test(field) && !ctx.listItemFields?.(list!)?.some((name) => /(?:^|-)(?:cpf|rg|nascimento)(?:-|$)/.test(this.words(name)))
           || this.publicItemDescriptor(field, ctx.listItemFields?.(list!))
-          || !personal(this.words(field)) && !/^(?:id|uuid|codigo|cod|cd|index|indice|key|chave|value|url|link|icon|icone|imagem|image|img|src|rota|route|path|tipo|type|status|ativo|selecionado|selected|disabled|checked)$/i.test(field)) return `${item}.${field}`;
+          || !personal(this.words(field)) && !/^(?:id|uuid|codigo|cod|cd|index|indice|key|chave|value|url|link|icon|icone|imagem|image|img|src|rota|route|path|tipo|type|status|ativo|selecionado|selected|disabled|checked)$/i.test(field)) return pathOf;
         unproven = true;
       }
     }
@@ -323,20 +356,24 @@ export class TemplateTagger {
     const field = path?.split(/\s*[?!]?\.\s*/).pop() ?? '';
     const words = this.words(field).split('-');
     // `apiTexto`, `botaoLabel`, `item`, `isLastSlide`: o campo não diz qual dado é.
-    const generic = !field || /^[A-Z0-9_]+$/.test(field) || /^(?:is|has|can|should|show|mostrar|exibir)$/.test(words[0] ?? '')
+    const generic = !field || /^[A-Z0-9_]+$/.test(field) || /^(?:is|has|can|should|show|mostrar|exibir|texto|text|label|titulo|title|rotulo)$/.test(words[0] ?? '')
       || /^(?:label|title|titulo|text|texto|rotulo|descricao|description|nome|name|value|valor|item|key|chave|botao|button|link|opcao|option|data|conteudo)$/.test(words.at(-1) ?? '')
       || /\d$/.test(field);
     return generic ? '[rotulo-do-botao-exibido]' : `[${words.join('-')}]`;
   }
 
-  private optionPlaceholder(field: string, click: string, item: string): string {
-    if (!/^(?:name|nome|label|title|titulo|text|texto)$/i.test(field)) return `[${this.words(field)}-selecionado]`;
-    // Remove prefixo de evento, o verbo e preposições: `onSelecionarSala`/`irPara` → objeto da ação, ou o próprio item.
-    const words = this.words(this.analysis.handlerName(click)).split('-').filter(Boolean);
+  private optionPlaceholder(field: string, click: string, item: string, list = ''): string {
+    if (!/^(?:name|nome|label|title|titulo|text|texto|rotulo|descricao|description)$/i.test(field)) return `[${this.words(field)}-selecionado]`;
+    // Remove prefixo de evento, o verbo e preposições: `onSelecionarSala`/`irPara` → objeto da ação, ou o próprio item;
+    // palavras de código (`emitItem`) e de estrutura de UI (`autoComplete`) não são o objeto.
+    const words = this.semanticWords(this.analysis.handlerName(click), false).split('-').filter(Boolean);
     if (/^(?:on|ao|handle)$/.test(words[0] ?? '')) words.shift();
     words.shift();
     while (/^(?:para|pra|de|do|da|dos|das|ao|a|o|em|no|na|com|to|for|of)$/.test(words[0] ?? '')) words.shift();
-    const noun = words.join('-') || this.words(item);
+    // Sem objeto no handler, o item da lista no singular (`unidades` → `unidade`); variável de uma letra não diz nada.
+    const singular = (plural: string): string => plural.replace(/(?:oes|aes)$/, 'ao').replace(/ais$/, 'al').replace(/eis$/, 'el').replace(/ns$/, 'm').replace(/([^s])s$/, '$1');
+    const fromItem = item.length > 2 ? this.semanticWords(item, false) : '';
+    const noun = words.join('-') || fromItem || singular(this.semanticWords(list.split('.').pop() ?? '', false));
     return `[nome${noun ? `-${noun}` : ''}-selecionado]`;
   }
 
@@ -403,11 +440,12 @@ export class TemplateTagger {
    */
   private loopSource(before: string, ownLoop: string | undefined, variable: string, depth = 0): string | null {
     const name = variable.replace(/\$/g, '\\$');
-    const source = '(?:this\\.)?([A-Za-z_$][\\w$]*(?:\\??\\.[A-Za-z_$][\\w$]*)*)';
+    // Leitura de signal (`tipos()`) e pipes (`| async`, `| keyvalue`, `| slice:0:3`) entregam itens da própria lista.
+    const source = '(?:this\\.)?([A-Za-z_$][\\w$]*(?:\\(\\))?(?:\\??\\.[A-Za-z_$][\\w$]*(?:\\(\\))?)*)(?:\\s*\\|\\s*[A-Za-z_$][\\w$]*(?:\\s*:\\s*[^;,|"\')]+)*)*';
     const own = ownLoop && new RegExp(`^\\s*let\\s+${name}\\s+of\\s+${source}\\s*(?:[;,]|$)`).exec(ownLoop);
     const found = own ? own[1]! : [...before.matchAll(new RegExp(`(?:\\*ngFor\\s*=\\s*["']\\s*let\\s+${name}\\s+of\\s+|@for\\s*\\(\\s*${name}\\s+of\\s+)${source}\\s*[;,"')]`, 'g'))].at(-1)?.[1];
     if (!found) return null;
-    const [root, ...rest] = found.replace(/\?\./g, '.').split('.');
+    const [root, ...rest] = found.replace(/\(\)/g, '').replace(/\?\./g, '.').split('.');
     if (!rest.length || depth > 6) return rest.length ? null : root!;
     // A raiz pode ser o item de um laço externo; sem laço, é membro do componente.
     const outer = this.loopSource(before.slice(0, before.lastIndexOf(found)), undefined, root!, depth + 1);
@@ -483,7 +521,9 @@ export class TemplateTagger {
 
   /** Identificador sem palavras de código: btnProtocoloCompartilhar → protocolo-compartilhar */
   private semanticWords(value: string, translate = true): string {
-    const words = this.words(value).split('-').filter((word) => word && !TECHNICAL_LABEL_WORDS.has(word) && !UI_STRUCTURE_WORDS.has(word));
+    // `autoComplete` é o nome de um componente de UI, não um objeto do negócio.
+    const words = this.words(value).replace(/(^|-)auto-complete(?=-|$)/g, '$1autocomplete').split('-')
+      .filter((word) => word && !TECHNICAL_LABEL_WORDS.has(word) && !UI_STRUCTURE_WORDS.has(word));
     return (translate ? words.map((word) => ACTION_VERBS.get(word) ?? word) : words).join('-');
   }
 
@@ -851,7 +891,12 @@ export class TemplateTagger {
       const rotulos = proven.length > 1 ? proven : [];
       // Texto de menu/serviço muda sem novo build: o runtime lê o valor visível no clique.
       const boundLabels = this.boundLabelExpressions(attrs, ctx);
-      const dynamicSource = (label && !boundLabels.length) || proven.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs, ctx);
+      const selectionSource = this.listSelection(html, tag, tagEnd, attrs, ctx, masked.slice(0, m.index!));
+      // Texto que é o próprio item escolhido vai na opção; o rótulo é a ação (`selecionar-agenda` + `14:30`).
+      const textOfItem = (expression: string): boolean => !!selectionSource
+        && [...attrs].some(([name, value]) => name.startsWith('(') && this.choiceHandler(value)) && new RegExp(`^\\s*${selectionSource.split('.')[0]!.replace(/\$/g, '\\$')}\\b`).test(expression);
+      const candidate = (label && !boundLabels.length) || proven.length || tag === 'form' ? null : this.dynamicLabelSource(html, tag, tagEnd, attrs, ctx);
+      const dynamicSource = candidate && textOfItem(candidate) ? null : candidate;
       // Input ligado não aparece no DOM do componente como atributo: o runtime lê o valor exato da expressão.
       // Nome do input do componente que traz o texto (`textoLabel` em `[textoLabel]`), quando o texto vem de input.
       const labelInput = dynamicSource && boundLabels.includes(dynamicSource)
@@ -861,19 +906,19 @@ export class TemplateTagger {
         derived.add('[attr.data-at-label]');
       }
       const dynamicIds: string[] = [];
-      const selectionSource = this.listSelection(html, tag, tagEnd, attrs, ctx);
       if (selectionSource === undefined) diagnostics.push({ code: 'OPTION_PUBLIC_VALUE_UNPROVEN', arquivo: ctx.relFile, linha,
         mensagem: 'gesto recebe item de lista, mas não há um único rótulo público comprovado; exponha label/title/text no contrato público ou configure a integração do controle' });
+      const selectionList = selectionSource ? this.loopSource(masked.slice(0, m.index!), attrs.get('*ngFor'), selectionSource.split('.')[0]!) ?? '' : '';
       if (selectionSource) {
         desired.set('[attr.data-at-option]', selectionSource);
         derived.add('[attr.data-at-option]');
-        const list = /^\s*let\s+[\w$]+\s+of\s+(?:this\.)?([\w$]+)/.exec(attrs.get('*ngFor') ?? '')?.[1];
-        const field = selectionSource.split('.')[1];
+        const list = selectionList;
+        const field = selectionSource.split('.').pop();
         const values = list && field ? ctx.listLabels?.(list, field) : null;
         if (values?.length) { desired.set('data-at-option-allowed', values.join('|')); derived.add('data-at-option-allowed'); }
       }
       // Campo público comprovado nomeia o valor; sem ele, o significado genérico.
-      const optionSheet = selectionSource ? this.optionPlaceholder(selectionSource.split('.')[1] ?? 'nome', [...attrs].find(([name]) => name.startsWith('('))?.[1] ?? '', selectionSource.split('.')[0]!) : '[valor-selecionado]';
+      const optionSheet = selectionSource ? this.optionPlaceholder(selectionSource.includes('.') ? selectionSource.split('.').pop()! : 'nome', [...attrs].find(([name]) => name.startsWith('('))?.[1] ?? '', selectionSource.split('.')[0]!, selectionList) : '[valor-selecionado]';
       // Planilha registra o significado do valor dinâmico, nunca a expressão de código.
       const sheetLabel = (rotulo: string, dynamic: boolean): string => dynamic ? this.dynamicPlaceholder(dynamicSource ?? '') : rotulo;
       if (rotulos.length && ctx.mode !== 'ref') {
@@ -1047,6 +1092,11 @@ export class TemplateTagger {
         desired.set('data-at-rotulo-dinamico', dynamicIds.join('|'));
         derived.add('data-at-rotulo-dinamico');
       }
+      // Opção ou valor exibido sem evento comprovado no próprio elemento seria um atributo órfão (e um contrato vazio).
+      const clicked = entries.slice(entryStart).some((entry) => entry.evento === 'click');
+      if (!clicked) {
+        for (const name of ['[attr.data-at-option]', 'data-at-option-allowed', '[attr.data-at-label]']) { desired.delete(name); derived.delete(name); }
+      }
       if (desired.size > 0) {
         desired.set('data-at-owner', ctx.owner);
         desired.set('data-at-funcionalidade', funcionalidade);
@@ -1089,12 +1139,8 @@ export class TemplateTagger {
         desired.set('data-at-ref', ref);
         derived.clear();
         derived.add('data-at-ref');
-        if (selectionSource) { desired.set('[attr.data-at-option]', selectionSource); derived.add('[attr.data-at-option]'); }
-        if (labelBinding) { desired.set('[attr.data-at-label]', labelBinding); derived.add('[attr.data-at-label]'); }
-      }
-      // Opção sem evento comprovado no próprio elemento seria um atributo órfão.
-      if (!entries.slice(entryStart).some((entry) => entry.evento === 'click')) {
-        for (const name of ['[attr.data-at-option]', 'data-at-option-allowed', '[attr.data-at-label]']) { desired.delete(name); derived.delete(name); }
+        if (selectionSource && clicked) { desired.set('[attr.data-at-option]', selectionSource); derived.add('[attr.data-at-option]'); }
+        if (labelBinding && clicked) { desired.set('[attr.data-at-label]', labelBinding); derived.add('[attr.data-at-label]'); }
       }
       // Substitui o output no mesmo lugar: a compactação não deve reordenar
       // os outros atributos da tag nem produzir diffs sem significado.

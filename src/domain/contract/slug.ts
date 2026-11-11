@@ -48,7 +48,7 @@ export function joinLabel(action: string, context: string, max = MAX_PROVEN_LABE
 export const UI_STRUCTURE_WORDS: ReadonlySet<string> = new Set([
   'modal', 'modais', 'popover', 'dialog', 'tooltip', 'overlay', 'sheet', 'header', 'footer', 'component', 'componente',
   'page', 'item', 'items', 'wrapper', 'container', 'opened', 'closed', 'selected', 'div', 'span', 'el', 'ref', 'click', 'clicked',
-  'iframe', 'webview',
+  'iframe', 'webview', 'autocomplete',
 ]);
 
 /** Verbo de código em inglês na forma que o negócio lê (CLI e runtime, para a planilha bater com o envio). */

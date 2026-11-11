@@ -26,6 +26,11 @@ export const PERSONAL_FIELD_WORDS: ReadonlySet<string> = new Set(['cpf', 'cnpj',
 /** Entidade pessoa: o nome dela ou um campo dela sem significado de catálogo é dado pessoal. */
 export const PERSON_WORDS: ReadonlySet<string> = new Set(['beneficiario', 'titular', 'dependente', 'usuario', 'user', 'paciente', 'segurado',
   'cliente', 'pessoa', 'mae', 'pai', 'conjuge', 'responsavel', 'contato', 'medico', 'profissional', 'prestador', 'social', 'completo', 'profile', 'perfil']);
+/** Campo que só uma pessoa tem: o tipo que o declara é de pessoa, e o nome dele é dado pessoal. */
+export const PERSON_IDENTIFIER_WORDS: ReadonlySet<string> = new Set(['cpf', 'rg', 'nascimento', 'email', 'telefone', 'celular', 'matricula', 'carteirinha', 'sexo', 'genero']);
+/** Verbo de escolha de valor: o item escolhido vai na opção e o rótulo é a ação. */
+export const CHOICE_VERBS: ReadonlySet<string> = new Set(['selecionar', 'seleciona', 'select', 'escolher', 'escolhe', 'choose', 'marcar', 'marca',
+  'filtrar', 'filtra', 'filter', 'definir', 'set']);
 /** Palavra que torna o resto do campo uma classificação (`tipoDocumento`, `statusConta`): o valor é do catálogo, não da pessoa. */
 export const CLASSIFIER_WORDS: ReadonlySet<string> = new Set(['tipo', 'type', 'categoria', 'category', 'especie', 'modalidade', 'classe', 'status', 'situacao']);
 

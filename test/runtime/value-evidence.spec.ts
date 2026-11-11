@@ -86,7 +86,7 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
     const clicks=sent.filter((event)=>event.name==='click');
     expect(clicks.map((event)=>[event.params['rotulo'],event.params['opcao_selecionada_1']])).toEqual([
       ['confirmar-escolha',undefined],['escolher-unidade','unidade-sul'],['alterar-unidade','unidade-leste'],
-      ['continuar',undefined],['abrir-opcoes',undefined],['reservar','espaco-norte'],['trocar-reserva','espaco-sul'],['espaco-leste','espaco-leste'],['espaco-oeste','espaco-oeste'],
+      ['continuar',undefined],['abrir-opcoes',undefined],['reservar','espaco-norte'],['trocar-reserva','espaco-sul'],['escolher','espaco-leste'],['escolher','espaco-oeste'],
     ]);
     expect(clicks.every((event)=>event.params['tela']==='app-x:produto:catalogo' && event.params['funcionalidade']==='catalogo')).toBe(true);
     expect(warnings).toEqual([]);

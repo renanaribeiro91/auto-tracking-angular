@@ -168,6 +168,59 @@ describe('aba do Ionic navega sem handler', () => {
   });
 });
 
+describe('item escolhido em laço: a ação é o rótulo, o valor é a opção', () => {
+  it.each([
+    ['laço aninhado *ngFor', '<div *ngFor="let agenda of agendas"><ion-button *ngFor="let horaItem of agenda.horas" (click)="selecionarAgenda(agenda, horaItem)">{{ horaItem.hora }}</ion-button></div>', 'selecionar-agenda', 'horaItem.hora'],
+    ['@for aninhado com signal', '@for (agenda of agendas(); track agenda.id) { @for (h of agenda.horas; track h.hora) { <button (click)="selecionarHorario(h)">{{ h.hora }}</button> } }', 'selecionar-horario', 'h.hora'],
+    ['*ngFor no pai', '<ul *ngFor="let e of especialidades"><li (click)="escolherEspecialidade(e)">{{ e.descricao }}</li></ul>', 'escolher-especialidade', 'e.descricao'],
+  ])('%s', (_case, html, rotulo, option) => {
+    const result = tagTemplate(html, ctx());
+    expect(result.entries.map((entry) => entry.rotulo)).toEqual([rotulo]);
+    expect(result.entries[0]!.opcao_selecionada_1).toMatch(/^\[[a-z-]+-selecionado\]$/);
+    expect(result.html).toContain(`[attr.data-at-option]="${option}"`);
+    expect(result.html).not.toContain('data-at-label');
+  });
+
+  it('menu em @for (abrir destino) não vira opção: o texto do item é o rótulo', () => {
+    const result = tagTemplate('@for (s of servicos; track s.id) { <button (click)="abrir(s)">{{ s.titulo }}</button> }', ctx());
+    expect(result.html).not.toContain('data-at-option');
+    expect(result.entries[0]!.opcao_selecionada_1).toBeUndefined();
+  });
+
+  it('escolha sem evento comprovado (output sem prova) não deixa opção órfã nem contrato vazio', () => {
+    const result = tagTemplate('@for (v of vacinas; track v.id) { <lib-check (selecionado)="selecionarVacina(v)">{{ v.descricao }}</lib-check> }', ctx());
+    expect(result.entries).toEqual([]);
+    expect(result.html).not.toMatch(/data-at-/);
+  });
+
+  it.each([
+    ['handler sem objeto: o item da lista no singular', '<p *ngFor="let u of unidades" (click)="selecionar(u)">{{ u.descricao }}</p>', '[nome-unidade-selecionado]'],
+    ['componente de UI no handler não é o objeto', '<p *ngFor="let u of unidades" (click)="selecionarAutoComplete(u)">{{ u.descricao }}</p>', '[nome-unidade-selecionado]'],
+    ['plural do português', '<p *ngFor="let x of opcoes" (click)="selecionar(x)">{{ x.descricao }}</p>', '[nome-opcao-selecionado]'],
+    ['variável com nome de negócio vence a lista', '<p *ngFor="let plano of itens" (click)="selecionar(plano)">{{ plano.descricao }}</p>', '[nome-plano-selecionado]'],
+  ])('planilha nomeia a opção em linguagem de produto: %s', (_case, html, sheet) => {
+    expect(tagTemplate(html, ctx()).entries[0]!.opcao_selecionada_1).toBe(sheet);
+  });
+
+  it('caminho aninhado do item (keyvalue) é a opção', () => {
+    const result = tagTemplate('<ion-label *ngFor="let item of legendas | keyvalue" (click)="selecionar(item)">{{ item.value.descricao }}</ion-label>', ctx());
+    expect(result.html).toContain('[attr.data-at-option]="item.value.descricao"');
+  });
+
+  it('item com dado pessoal: decidido, sem opção e sem aviso de dúvida', () => {
+    const result = tagTemplate('<div *ngFor="let item of historico"><p (click)="selecionarHistorico(item)">{{ item.enderecoCompleto }}</p></div>', ctx());
+    expect(result.entries.map((entry) => entry.rotulo)).toEqual(['selecionar-historico']);
+    expect(result.html).not.toMatch(/data-at-(?:option|label)/);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('escolha de pessoa nunca envia o nome', () => {
+    const result = tagTemplate('<button *ngFor="let b of beneficiarios" (click)="selecionarBeneficiario(b)">{{ b.nome }}</button>', ctx());
+    expect(result.html).not.toMatch(/data-at-(?:option|label)/);
+    expect(result.entries[0]!.rotulo).toBe('selecionar-beneficiario');
+  });
+});
+
 describe('runtime envia o valor exibido', () => {
   const run = async (body: string): Promise<TrackingEvent[]> => {
     const sent: TrackingEvent[] = [];
@@ -197,6 +250,15 @@ describe('runtime envia o valor exibido', () => {
   it('valor vazio ou com dado pessoal não é enviado', async () => {
     expect(await run(page + rendered(''))).toEqual([]);
     expect(await run(page + rendered('fulano@exemplo.com'))).toEqual([]);
+  });
+
+  it('horário escolhido: rótulo é a ação e a opção é o horário exibido', async () => {
+    const slot = tagTemplate('<ion-button *ngFor="let h of horas" (click)="selecionarHorario(h)">{{ h.hora }}</ion-button>', ctx()).html
+      .replace('[attr.data-at-option]="h.hora"', 'data-at-option="14:30"').replace(/\s\*ngFor="[^"]*"/, '').replace('{{ h.hora }}', '14:30')
+      .replace('<ion-button', '<ion-button data-click');
+    const [click] = await run(page + slot);
+    expect(click!.params['rotulo']).toBe('selecionar-horario');
+    expect(click!.params['opcao_selecionada_1']).toBe('14-30');
   });
 
   it('toque no texto da aba envia o rótulo da aba', async () => {
