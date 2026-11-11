@@ -22,12 +22,36 @@ export const PERSONAL_FIELD_WORDS: ReadonlySet<string> = new Set(['cpf', 'cnpj',
   'endereco', 'address', 'logradouro', 'cep', 'bairro', 'cidade', 'cartao', 'carteirinha', 'numero', 'number', 'matricula', 'senha', 'password',
   'token', 'protocolo', 'nascimento', 'idade', 'valor', 'saldo', 'preco', 'data', 'date', 'documento', 'placa', 'conta', 'agencia',
   'arquivo', 'file', 'anexo', 'foto', 'imagem', 'mensagem', 'comentario', 'observacao', 'apelido',
-  'distancia', 'quantidade', 'qtd', 'total', 'percentual', 'contador', 'count']);
+  'distancia', 'quantidade', 'qtd', 'total', 'percentual', 'contador', 'count',
+  // Saúde e respostas da própria pessoa (dado sensível).
+  'peso', 'altura', 'imc', 'pressao', 'glicemia', 'colesterol', 'sintoma', 'diagnostico', 'cid', 'alergia', 'gestacao', 'resposta', 'answer', 'field',
+  'necessidade', 'deficiencia', 'pne',
+  // Localização da pessoa.
+  'localizacao', 'location', 'coordenada', 'latitude', 'longitude', 'geolocalizacao',
+  // Contato, endereço e financeiro em qualquer domínio (LGPD), também em inglês.
+  'phone', 'mobile', 'street', 'rua', 'zip', 'postal', 'salario', 'salary', 'renda', 'income', 'balance', 'iban', 'pix', 'birth', 'birthday', 'dob',
+  'ssn', 'passport', 'passaporte', 'health', 'weight', 'height', 'diagnosis']);
 /** Entidade pessoa: o nome dela ou um campo dela sem significado de catálogo é dado pessoal. */
 export const PERSON_WORDS: ReadonlySet<string> = new Set(['beneficiario', 'titular', 'dependente', 'usuario', 'user', 'paciente', 'segurado',
-  'cliente', 'pessoa', 'mae', 'pai', 'conjuge', 'responsavel', 'contato', 'medico', 'profissional', 'prestador', 'social', 'completo', 'profile', 'perfil']);
-/** Campo que só uma pessoa tem: o tipo que o declara é de pessoa, e o nome dele é dado pessoal. */
-export const PERSON_IDENTIFIER_WORDS: ReadonlySet<string> = new Set(['cpf', 'rg', 'nascimento', 'email', 'telefone', 'celular', 'matricula', 'carteirinha', 'sexo', 'genero']);
+  'cliente', 'pessoa', 'mae', 'pai', 'conjuge', 'responsavel', 'contato', 'medico', 'profissional', 'prestador', 'social', 'completo', 'profile', 'perfil',
+  'solicitante', 'bebe', 'crianca', 'filho', 'filha', 'familiar', 'membro', 'customer', 'person', 'patient', 'member', 'holder', 'employee',
+  'funcionario', 'colaborador', 'aluno', 'student', 'motorista', 'driver', 'passageiro', 'passenger', 'hospede', 'guest', 'comprador', 'buyer']);
+/** Nomes que só dizem que é um valor ou item, não o que ele é: não provam que o dono é uma coisa. */
+export const GENERIC_OWNER_WORDS: ReadonlySet<string> = new Set(['item', 'itens', 'items', 'lista', 'list', 'data', 'obj', 'objeto', 'object', 'value',
+  'model', 'element', 'elemento', 'el', 'row', 'entry', 'result', 'resultado', 'response', 'res', 'resp', 'select', 'selected', 'selecionado',
+  'selecionada', 'opcao', 'option', 'id', 'current', 'atual', 'info', 'detalhe', 'details', 'vm', 'state', 'payload', 'body', 'retorno', 'ret',
+  'it', 'event', 'evento', 'context', 'contexto', 'config', 'param', 'params', 'aux', 'temp', 'tmp', 'novo', 'new']);
+/** Registro da própria pessoa (formulário, anamnese, dados enviados): o conteúdo é dela, salvo classificação. */
+export const PERSONAL_RECORD_WORDS: ReadonlySet<string> = new Set(['dados', 'dado', 'anamnese', 'questionario', 'formulario', 'form', 'ficha',
+  'prontuario', 'cadastro', 'resposta', 'respostas', 'answer', 'answers', 'survey']);
+/** Campo que só uma pessoa física tem (estabelecimento também tem telefone e e-mail): quem o declara ou acessa é pessoa. */
+export const PERSON_IDENTIFIER_WORDS: ReadonlySet<string> = new Set(['cpf', 'rg', 'nascimento', 'matricula', 'carteirinha', 'sexo', 'genero', 'idade',
+  'birth', 'birthday', 'birthdate', 'dob', 'ssn', 'passport', 'passaporte', 'gender', 'sex', 'age']);
+/** Nome de handler que só descreve o gesto ou o tratamento (`ajustaSwipe`, `handleTouch`): a ação é o método que ele chama. */
+export const GESTURE_HANDLER_WORDS: ReadonlySet<string> = new Set(['swipe', 'gesture', 'gesto', 'touch', 'toque', 'tap', 'pan', 'pinch', 'press',
+  'ajusta', 'ajustar', 'trata', 'tratar', 'handle', 'handler', 'callback', 'listener']);
+/** Palavras que, depois de `voltar`, só repetem que o destino é a tela anterior. */
+export const BACK_REDUNDANT_WORDS: ReadonlySet<string> = new Set(['pagina', 'page', 'tela', 'screen', 'anterior', 'previous', 'para', 'pra', 'a', 'o', 'ao', 'to']);
 /** Verbo de escolha de valor: o item escolhido vai na opção e o rótulo é a ação. */
 export const CHOICE_VERBS: ReadonlySet<string> = new Set(['selecionar', 'seleciona', 'select', 'escolher', 'escolhe', 'choose', 'marcar', 'marca',
   'filtrar', 'filtra', 'filter', 'definir', 'set']);
@@ -62,7 +86,7 @@ export const isInputField = (tag: string): boolean => {
 };
 
 /** Eventos técnicos que não representam ação de negócio. */
-export const TECHNICAL_EVENT = /(blur|focus|input|keyup|keydown|keypress|paste|copy|cut|drop|scroll|refresh|infinite|dismiss|didenter|willenter|didleave|willleave|load|error|swipe|touch|drag|hover|mouse|contextmenu|outputform|valuechange|ngmodelchange|animation|transition|resize|init|destroy|ready|ionselect|formchange|formvalid|onvalid|onmonthchange|(?:opened|closed)modal)/i;
+export const TECHNICAL_EVENT = /(blur|focus|input|keyup|keydown|keypress|paste|copy|cut|drop|scroll|refresh|infinite|dismiss|didenter|willenter|didleave|willleave|load|error|touch|drag|hover|mouse|contextmenu|outputform|valuechange|ngmodelchange|animation|transition|resize|init|destroy|ready|ionselect|formchange|formvalid|onvalid|onmonthchange|(?:opened|closed)modal)/i;
 
 /** Componentes Ionic que agem sozinhos ao toque, sem handler no template, e o nome da ação quando não há texto. */
 export const IONIC_OWN_ACTION: Readonly<Record<string, string>> = {

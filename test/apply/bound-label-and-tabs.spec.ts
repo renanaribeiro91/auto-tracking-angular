@@ -34,7 +34,10 @@ describe('texto do controle vindo de input ligado a dado de runtime', () => {
     ['nome de especialidade, mesmo vindo do prestador', 'prestador.nomeEspecialidade', true],
     ['nome da pessoa', 'beneficiario.nome', false],
     ['nome da pessoa qualificado por pessoa', 'item.nomePrestador', false],
-    ['nome sem qualificador e sem dono conhecido: na dúvida é pessoal', 'select.model.model.id.name', false],
+    ['só nomes genéricos, sem tipo nem origem tipada: o código não prova que é coisa', 'select.model.model.id.name', false],
+    ['nome de coisa do domínio sem tipo', 'medicamento.nome', true],
+    ['registro da própria pessoa', 'anamnese.objetivo', false],
+    ['dado de saúde', 'avaliacao.peso', false],
     ['campo qualquer de entidade pessoa', 'usuario.apelido', false],
     ['lista de pessoas', 'beneficiarios[0].nomePlano', false],
     ['valor monetário', 'item.valor', false],
@@ -67,6 +70,27 @@ describe('texto do controle vindo de input ligado a dado de runtime', () => {
     const result = tagTemplate(html, ctx());
     expect(result.entries.find((entry) => entry.evento === 'click')!.rotulo).toBe(rotulo);
     expect(result.html).not.toContain('data-at-label');
+  });
+
+  it.each([
+    ['produto do pedido', 'pedido.produto.nome', true],
+    ['categoria da loja', 'categoria.name', true],
+    ['cliente', 'cliente.nome', false],
+    ['customer em inglês', 'customer.name', false],
+    ['saldo', 'conta.balance', false],
+  ])('domínio sem relação com saúde (varejo, banco): %s (%s) lido = %s', (_case, binding, dynamic) => {
+    expect(tagTemplate(docButton(binding), ctx()).html.includes('data-at-label')).toBe(dynamic);
+  });
+
+  it('evidência no próprio template: a mesma variável com campo de pessoa física, ou handler de pessoa, é pessoa', () => {
+    const withCpf = tagTemplate(`${docButton('titular.nome')}<span>{{ titular.cpf }}</span>`, ctx());
+    expect(withCpf.html).not.toContain('data-at-label');
+    const byHandler = tagTemplate('<lib-doc [textoLabel]="escolhido.nome" (click)="selecionarBeneficiario(escolhido)"></lib-doc>', ctx());
+    expect(byHandler.html).not.toContain('data-at-label');
+    const english = tagTemplate(`${docButton('row.name')}<span>{{ row.birthDate | date }}</span>`, ctx());
+    expect(english.html).not.toContain('data-at-label');
+    const thing = tagTemplate(`${docButton('clinica.nome')}<span>{{ clinica.telefone }}</span>`, ctx());
+    expect(thing.html).toContain('[attr.data-at-label]="clinica.nome"');
   });
 
   it('valor escolhido em controle de escolha é opção, nunca rótulo lido em runtime', () => {

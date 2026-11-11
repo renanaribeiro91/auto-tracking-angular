@@ -9,6 +9,7 @@ import {
   provideEnvironmentInitializer,
   reflectComponentType,
   ɵɵdefineInjectable,
+  ɵgetDirectives,
   type EnvironmentProviders,
   type Type,
 } from '@angular/core';
@@ -227,6 +228,7 @@ class AutoTrackingLifecycle {
       resolveEnvironment: () => dispatcher.resolveEnvironment(),
       send: (event) => dispatcher.send(event),
       warn: (message) => console.warn(message),
+      subscribeOutput: subscribeDirectiveOutput,
     };
   }
 
@@ -301,4 +303,24 @@ export function provideAutoTracking(options: TrackingOptions): EnvironmentProvid
     { provide: TRACKING_DISPATCHER, useFactory: () => new TrackingDispatcher(options, inject(Injector)) },
     provideEnvironmentInitializer(() => new AutoTrackingLifecycle(options).start()),
   ]);
+}
+
+type Subscribable = { subscribe(listener: () => void): { unsubscribe(): void } | (() => void) };
+
+/**
+ * @Output público `output` de uma diretiva no host, lido do próprio metadado da diretiva (`ɵdir.outputs`: público →
+ * propriedade), sem depender do nome da diretiva. Vale para `EventEmitter` e `output()`; `null` sem diretiva no host.
+ */
+export function subscribeDirectiveOutput(host: Element, output: string, listener: () => void): (() => void) | null {
+  let instances: readonly object[];
+  try { instances = ɵgetDirectives(host) as readonly object[]; } catch { return null; }
+  for (const instance of instances) {
+    const outputs = (instance.constructor as { ɵdir?: { outputs?: Record<string, string> } }).ɵdir?.outputs;
+    const property = outputs ? Object.entries(outputs).find(([, publicName]) => publicName === output)?.[0] ?? (output in outputs ? output : undefined) : undefined;
+    const emitter = property ? (instance as Record<string, unknown>)[property] as Subscribable | undefined : undefined;
+    if (typeof emitter?.subscribe !== 'function') continue;
+    const subscription = emitter.subscribe(() => listener());
+    return typeof subscription === 'function' ? subscription : () => subscription.unsubscribe();
+  }
+  return null;
 }

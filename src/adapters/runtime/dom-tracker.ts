@@ -8,7 +8,7 @@ import type { TrackingSurfaceDefinition } from '../../domain/contract/tracking-s
 import { trackingSurfaceContract } from '../../domain/contract/tracking-surface.js';
 import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
-import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_HOST_TAG, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
+import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_HOST_TAG, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS, EMITTED_OUTPUT_PREFIX } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
 import { decodeScreenRoutes, screenForRoute, screenPath, subfuncionalidadeOf, type ScreenRoute } from '../../domain/contract/screen-binding.js';
 
@@ -23,6 +23,11 @@ export interface DomTrackerDeps {
   resolveEnvironment(): Promise<string | null>;
   send(event: TrackingEvent): void | Promise<void>;
   warn(message: string): void;
+  /**
+   * Inscreve `listener` no @Output público `output` de uma diretiva do `host` (gesto reconhecido em código pela
+   * própria diretiva, sem evento DOM). Devolve o cancelamento, ou `null` quando a diretiva ainda não existe no host.
+   */
+  subscribeOutput?(host: Element, output: string, listener: () => void): (() => void) | null;
 }
 
 type Params = Record<string, string>;
@@ -318,7 +323,28 @@ export class DomEventTracker {
       const current = mode !== 'ref' ? element.getAttribute('data-at-event') : null;
       if (current) listen(current);
       if (descriptor?.click) listen(descriptor.click.event);
-      for (const output of DomEventTracker.outputsFor(element, mode)) listen(output.event);
+      for (const output of DomEventTracker.outputsFor(element, mode)) {
+        listen(output.event);
+        if (output.event.startsWith(EMITTED_OUTPUT_PREFIX)) subscribeEmitted(element, output.event);
+      }
+    };
+    /**
+     * Output emitido pela própria diretiva (gesto reconhecido em código): o runtime escuta o @Output real e o reenvia
+     * como evento do host, que segue o mesmo caminho do clique. Sem diretiva no host, nada é enviado.
+     */
+    const emitted = new Map<Element, Map<string, () => void>>();
+    const subscribeEmitted = (host: Element, eventName: string, attempt = 0): void => {
+      if (!this.deps.subscribeOutput || emitted.get(host)?.has(eventName)) return;
+      const output = eventName.slice(EMITTED_OUTPUT_PREFIX.length);
+      const cancel = this.deps.subscribeOutput(host, output, () => {
+        try {
+          const Custom = this.document.defaultView?.CustomEvent ?? CustomEvent;
+          host.dispatchEvent(new Custom(eventName, { bubbles: true, composed: true }));
+        } catch (error) { this.warnSafely(`[auto-tracking] gesto de diretiva ignorado com segurança: ${String(error)}`); }
+      });
+      if (cancel) emitted.set(host, (emitted.get(host) ?? new Map()).set(eventName, cancel));
+      // A diretiva nasce junto com o elemento; quando o marcador chega antes dela, tenta de novo no próximo ciclo.
+      else if (attempt < 3) setTimeout(() => { if (this.active && host.isConnected) subscribeEmitted(host, eventName, attempt + 1); }, 0);
     };
 
     const scheduler = new DomDiscoveryScheduler(this.document, discover,
@@ -338,6 +364,12 @@ export class DomEventTracker {
             showDialogs(node);
           }
           // Overlay removido sem evento de fechamento não pode manter o vínculo de origem.
+          for (const node of Array.from(record.removedNodes)) if (emitted.size && DomEventTracker.isElement(node)) {
+            for (const [host, subscriptions] of [...emitted]) if (node === host || node.contains(host)) {
+              for (const cancel of subscriptions.values()) cancel();
+              emitted.delete(host);
+            }
+          }
           for (const node of Array.from(record.removedNodes)) if (overlayOrigins.size && DomEventTracker.isElement(node)) {
             for (const overlay of [...overlayOrigins.keys()]) if (node === overlay || node.contains(overlay)) unbindOverlay(overlay);
           }
@@ -359,6 +391,8 @@ export class DomEventTracker {
       lifecycleListeners.length = 0;
       for (const unbind of overlayOrigins.values()) unbind();
       overlayOrigins.clear();
+      for (const subscriptions of emitted.values()) for (const cancel of subscriptions.values()) cancel();
+      emitted.clear();
     };
     try {
       // Gestos DOM principais precisam funcionar imediatamente; descoberta

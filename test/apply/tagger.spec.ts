@@ -755,7 +755,8 @@ describe('tagger: rótulo pertence ao gesto, não ao componente', () => {
 
   it('conectivo "ao" do handler não entra no rótulo', () => {
     const result = tagTemplate(`<ion-button (click)="aoClicarVoltarPaginaAnterior()"><ion-icon name="arrow-back"></ion-icon></ion-button>`, ctx());
-    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar-pagina-anterior' });
+    // "Página anterior" só repete o destino do voltar.
+    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar' });
   });
 });
 
@@ -769,7 +770,7 @@ describe('tagger: título do host como rótulo', () => {
   });
   it('voltar do bsds-header não usa o título projetado', () => {
     const result = tagTemplate(`<bsds-header (bsdsBackButtonClick)="voltarPaginaAnterior()"><h1>Vacinas</h1></bsds-header>`, ctx({ catalog: cat }));
-    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar-pagina-anterior' });
+    expect(result.entries[0]).toMatchObject({ rotulo: 'voltar' });
   });
 
   it('título dinâmico do header nunca vira rótulo do voltar, nem no clique', () => {

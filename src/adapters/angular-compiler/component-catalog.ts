@@ -16,6 +16,12 @@ export class AngularComponentCatalogBuilder {
       .map((item) => item.toLowerCase());
   }
 
+  /** Seletores de diretiva de atributo (`[bscSwipe]`, `ion-content[bscSwipe]`) → nome do atributo em minúsculas. */
+  attributeSelectors(selector: string): string[] {
+    return selector.split(',').map((item) => /^(?:[a-z][\w-]*)?\[([A-Za-z][\w-]*)\]$/i.exec(item.trim())?.[1]?.toLowerCase())
+      .filter((name): name is string => !!name);
+  }
+
   private literalText(node: ts.Node | undefined): string | null {
     return node && ts.isStringLiteralLike(node) ? node.text : null;
   }
@@ -80,11 +86,12 @@ export class AngularComponentCatalogBuilder {
   }
 
 /** Componentes de uma biblioteca APF: chamadas ɵɵngDeclareComponent com selector, inputs, outputs, template e host */
-  private readPackageComponents(file: string, source: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[]): ComponentDef[] {
+  private readPackageComponents(file: string, source: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[], usedAttributes: ReadonlySet<string> = new Set()): ComponentDef[] {
     const text = fs.readFileSync(file, 'utf-8');
     // parse (caro) só de arquivos que declaram algum seletor usado nos templates do projeto
-    if (!text.includes('ngDeclareComponent') || (![...usedTags].some((tag) => new RegExp(`['\"]${tag}['\"]`).test(text))
-      && !overlayClasses.some((name) => text.includes(`class ${name}`)))) return [];
+    const usesAttribute = text.includes('ngDeclareDirective') && [...usedAttributes].some((name) => text.toLowerCase().includes(`[${name}]`));
+    if (!usesAttribute && (!text.includes('ngDeclareComponent') || (![...usedTags].some((tag) => new RegExp(`['\"]${tag}['\"]`).test(text))
+      && !overlayClasses.some((name) => text.includes(`class ${name}`))))) return [];
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     const classes = new Map<string, ts.ClassLikeDeclaration>();
     const declares = new Map<string, ts.ObjectLiteralExpression>();
@@ -111,7 +118,8 @@ export class AngularComponentCatalogBuilder {
       // Overlay não é usado por tag: `tag[input]` ainda identifica o componente apresentado.
       const presented = declaredType && ts.isIdentifier(declaredType) && overlayClasses.includes(declaredType.text);
       const selectors = this.elementSelectors(presented ? selector.replace(/\[[^\]]*\]/g, '') : selector);
-      if (selectors.length === 0) continue;
+      const attributes = selectors.length ? [] : this.attributeSelectors(selector).filter((name) => usedAttributes.has(name));
+      if (selectors.length === 0 && attributes.length === 0) continue;
       const outputs = new Map<string, string>();
       const inputs = new Set<string>();
       const methods = new Map<string, string>();
@@ -143,6 +151,7 @@ export class AngularComponentCatalogBuilder {
         hostListeners,
         ...(typeName ? { className: typeName } : {}),
         truthyInputs,
+        ...(attributes.length ? { attributes } : {}),
       });
     }
     return defs;
@@ -192,7 +201,7 @@ export class AngularComponentCatalogBuilder {
   }
 
   /** Percorre dependências de runtime e peers instalados, inclusive transitivos e pacotes APF/Stencil. */
-  private readDependencyComponents(consumerRoot: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[]): ComponentDef[] {
+  private readDependencyComponents(consumerRoot: string, usedTags: ReadonlySet<string>, overlayClasses: readonly string[], usedAttributes: ReadonlySet<string> = new Set()): ComponentDef[] {
     const manifest = path.join(consumerRoot, 'package.json');
     if (!fs.existsSync(manifest)) return [];
     type PackageManifest = {
@@ -240,7 +249,7 @@ export class AngularComponentCatalogBuilder {
       if (pkg.module && !path.isAbsolute(pkg.module) && !pkg.module.split(/[\\/]/).includes('..')) bundles.add(path.join(dir, pkg.module));
       for (const bundle of bundles) {
         if (fs.existsSync(bundle) && fs.statSync(bundle).isFile()) {
-          defs.push(...this.readPackageComponents(bundle, name, usedTags, overlayClasses));
+          defs.push(...this.readPackageComponents(bundle, name, usedTags, overlayClasses, usedAttributes));
         }
       }
 
@@ -256,11 +265,18 @@ export class AngularComponentCatalogBuilder {
   buildCatalog(consumerRoot: string, projectDefs: readonly ComponentDef[], overlayClasses: readonly string[] = []): ComponentCatalog {
     const usedTags = new Set<string>();
     for (const d of projectDefs) for (const m of d.template.matchAll(/<([a-z][\w]*-[\w-]*)/gi)) usedTags.add(m[1]!.toLowerCase());
+    // Atributos simples usados nos templates: só pacotes com diretiva de algum deles são lidos.
+    const usedAttributes = new Set<string>();
+    for (const d of projectDefs) for (const tag of d.template.matchAll(/<[a-zA-Z][\w-]*((?:[^>"']|"[^"]*"|'[^']*')*)>/g)) {
+      for (const name of tag[1]!.replace(/"[^"]*"|'[^']*'/g, '').matchAll(/(?:^|\s)([A-Za-z][\w-]*)(?=\s|=|\/|$)/g)) usedAttributes.add(name[1]!.toLowerCase());
+    }
     const byTag = new Map<string, ComponentDef[]>();
+    const byAttribute = new Map<string, ComponentDef[]>();
     // Um mesmo seletor pode ter implementações em módulos diferentes. Não perder produtores distintos.
     const byClass = new Map<string, ComponentDef>();
-    for (const def of [...this.readDependencyComponents(consumerRoot, usedTags, overlayClasses), ...projectDefs]) {
+    for (const def of [...this.readDependencyComponents(consumerRoot, usedTags, overlayClasses, usedAttributes), ...projectDefs]) {
       for (const selector of def.selectors) byTag.set(selector, [...(byTag.get(selector) ?? []), def]);
+      for (const attribute of def.attributes ?? []) byAttribute.set(attribute, [...(byAttribute.get(attribute) ?? []), def]);
       if (def.className) byClass.set(def.className, def);
     }
     return {
@@ -270,6 +286,11 @@ export class AngularComponentCatalogBuilder {
         if (!output) return candidates[candidates.length - 1];
         const producers = candidates.filter((candidate) => candidate.outputs.has(output));
         return producers.length === 1 ? producers[0] : candidates[candidates.length - 1];
+      },
+      directive: (attributes, output) => {
+        const producers = [...new Set(attributes.flatMap((name) => byAttribute.get(name.toLowerCase()) ?? []))].filter((def) => def.outputs.has(output));
+        // Dois produtores do mesmo output no elemento não provam qual dispara.
+        return producers.length === 1 ? producers[0] : undefined;
       },
     };
   }

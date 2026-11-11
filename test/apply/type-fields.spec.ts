@@ -45,6 +45,49 @@ describe('campos do tipo declarado de um caminho do componente', () => {
   });
 });
 
+describe('tipo pela origem do valor quando o membro não é anotado', () => {
+  write('services/catalogo.service.ts', `import { TipoDocumento } from '../models';
+    export class CatalogoService {
+      tipos(): Observable<TipoDocumento[]> { return this.http.get('x'); }
+      tipo() { return this.http.get<TipoDocumento>('y'); }
+    }`);
+  write('services/pessoa.service.ts', `import { Pessoa } from '../models/pessoa';
+    export class PessoaService { atual(): Promise<Pessoa> { return fetch('z') as any; } }`);
+  const origin = write('origem/origem.page.ts', `import { CatalogoService } from '../services/catalogo.service';
+    import { PessoaService } from '../services/pessoa.service';
+    import { TipoDocumento } from '../models';
+    export class OrigemPage {
+      private pessoas = inject(PessoaService);
+      lista; selecionado; titular; convertido; anotado; mapeado; misturado;
+      constructor(private catalogo: CatalogoService) {}
+      ngOnInit() {
+        this.catalogo.tipos().pipe(take(1)).subscribe((res) => { this.lista = res; });
+        this.catalogo.tipo().subscribe((t) => this.selecionado = t);
+        this.pessoas.atual().then((p) => { this.titular = p; });
+        this.convertido = JSON.parse('{}') as TipoDocumento;
+        this.catalogo.tipos().subscribe((r: TipoDocumento[]) => { this.anotado = r; });
+        this.catalogo.tipos().pipe(map((r) => r.length)).subscribe((n) => { this.mapeado = n; });
+        this.catalogo.tipo().subscribe((t) => this.misturado = t);
+        this.misturado = 'texto';
+      }
+    }`);
+  const inferred = typeFields({ tsFile: origin, className: 'OrigemPage' } as ComponentInfo);
+
+  it.each([
+    ['subscribe de método de serviço com retorno declarado (pipe sem transformar)', 'lista', ['id', 'name', 'obrigatorio']],
+    ['método sem anotação que devolve http.get<T>', 'selecionado', ['id', 'name', 'obrigatorio']],
+    ['then de serviço injetado por inject()', 'titular', ['name', 'cpf', 'nascimento', 'id']],
+    ['as T', 'convertido', ['id', 'name', 'obrigatorio']],
+    ['parâmetro anotado do callback', 'anotado', ['id', 'name', 'obrigatorio']],
+  ])('%s', (_case, member, expected) => {
+    expect(inferred(member)).toEqual(expected);
+  });
+
+  it.each([['map transforma o valor', 'mapeado'], ['fontes com tipos diferentes', 'misturado']])('%s: sem prova', (_case, member) => {
+    expect(inferred(member)).toBeNull();
+  });
+});
+
 describe('dado pessoal decidido pelo tipo do dono', () => {
   const ctx = (typeFieldsOf: (owner: string) => readonly string[] | null): TagContext => ({
     owner: 'app', relFile: 'src/app/page/page.component.html', funcionalidade: 'x', tela: 'x', isScreen: false,

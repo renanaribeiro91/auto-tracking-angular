@@ -15,12 +15,16 @@ export interface ComponentDef {
   readonly className?: string;
   /** Propriedades iniciadas com valor verdadeiro na classe. */
   readonly truthyInputs?: ReadonlySet<string>;
+  /** Diretiva de atributo: nomes de atributo do seletor (`[bscSwipe]` → `bscswipe`), em minúsculas. */
+  readonly attributes?: readonly string[];
 }
 
 /** Catálogo de componentes disponível durante a marcação. */
 export interface ComponentCatalog {
   get(tag: string, output?: string): ComponentDef | undefined;
   ofClass?(className: string): ComponentDef | undefined;
+  /** Diretiva de atributo presente no elemento que declara o output. */
+  directive?(attributes: readonly string[], output: string): ComponentDef | undefined;
 }
 
 /** Gesto DOM observável pelo runtime; `:host` representa o próprio componente. */

@@ -919,10 +919,17 @@ export class AngularProjectIndexer {
         ?? this.resolveClass(reference, 'component', sourceFiles, recordsByName, recordsByFile))?.key;
     };
     const serviceRaw = new Map<string, { readonly record: ClassRecord; readonly methods: ReadonlyMap<string, string>; readonly injections: ReadonlyMap<string, string> }>();
+    const directives: ComponentDef[] = [];
     for (const record of records) {
       const declaration = record.declaration;
       const base = baseClass(record);
       if (record.kind === 'service') {
+        const directiveMeta = this.decorator(declaration, 'Directive')?.arguments[0];
+        if (directiveMeta && ts.isObjectLiteralExpression(directiveMeta)) {
+          const selector = directiveMeta.properties.find((item): item is ts.PropertyAssignment => ts.isPropertyAssignment(item) && item.name.getText() === 'selector');
+          const attributes = this.componentCatalogBuilder.attributeSelectors(this.literal(selector?.initializer) ?? '');
+          if (attributes.length) directives.push({ ...this.componentDef(declaration, directiveMeta, ''), selectors: [], attributes });
+        }
         serviceRaw.set(record.key, {
           record,
           methods: this.classMethods(declaration),
@@ -1234,7 +1241,7 @@ export class AngularProjectIndexer {
         });
       }),
     });
-    return { components, routedComponents, shellComponents, routeChains: routeTree.chains, routeInputBinding: routeTree.inputBinding, unresolvedRoutes: routeTree.unresolved, displayTexts, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
+    return { components, directives, routedComponents, shellComponents, routeChains: routeTree.chains, routeInputBinding: routeTree.inputBinding, unresolvedRoutes: routeTree.unresolved, displayTexts, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
       dynamicMethodValues, eagerServices };
   }
 

@@ -1,6 +1,6 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, IONIC_OWN_ACTION, PERSONAL_DATA_EXPRESSION, PERSONAL_FIELD_WORDS, PERSON_WORDS, PERSON_IDENTIFIER_WORDS, CLASSIFIER_WORDS, CHOICE_VERBS, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, IONIC_OWN_ACTION, PERSONAL_DATA_EXPRESSION, PERSONAL_FIELD_WORDS, PERSON_WORDS, PERSON_IDENTIFIER_WORDS, PERSONAL_RECORD_WORDS, GENERIC_OWNER_WORDS, CLASSIFIER_WORDS, CHOICE_VERBS, GESTURE_HANDLER_WORDS, BACK_REDUNDANT_WORDS, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
 import type { ComponentDef, ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
 import { joinLabel, labelSlug, MAX_PROVEN_LABEL, productLabel, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
@@ -48,6 +48,9 @@ export interface TagDiagnostic {
   readonly mensagem: string;
 }
 
+/** O que o código prova sobre o dono de um caminho: campos do tipo declarado e se é pessoa ou registro dela. */
+type OwnerEvidence = (owner: readonly string[]) => { readonly fields: readonly string[] | null; readonly person: boolean; readonly record: boolean; readonly thing: boolean } | null;
+
 export interface TagContext {
   readonly owner: string;
   /** caminho relativo à raiz do consumidor, usado no relatório */
@@ -68,6 +71,8 @@ export interface TagContext {
   readonly listItemFields?: (list: string) => readonly string[] | null;
   /** Campos do tipo declarado de um caminho do componente (`agendas.horas`); `null` sem tipo declarado. */
   readonly typeFields?: (ownerPath: string) => readonly string[] | null;
+  /** Único método da classe chamado por um método que só o embrulha (`ajustaSwipe() { cond ? this.voltar() : null }` → `voltar`). */
+  readonly methodDelegate?: (method: string) => string | null;
   /** ids já usados no projeto; recebe os novos ids gerados */
   readonly usedIds: Set<string>;
   /** Identidades já atribuídas nesta análise, distintas das reservas prévias. */
@@ -225,17 +230,34 @@ export class TemplateTagger {
     if (!bound.length && interpolations.length > 1 && !this.withoutChildren(inner).includes('{{')) return null;
     const expressions = [...bound, ...interpolations];
     if (!expressions.length) return /@(?:if|switch)\b|\*ngIf\b/.test(inner) ? 'conditional-text' : null;
-    if (expressions.some((expression) => this.personalExpression(expression, this.ownerFieldsResolver(html.slice(0, tagEnd), attrs, ctx)))) return null;
+    if (expressions.some((expression) => this.personalExpression(expression, this.ownerEvidence(html, tagEnd, attrs, ctx)))) return null;
     return expressions[0]!;
   }
 
-  /** Campos do tipo do dono de um caminho do template: variável de laço vira o caminho da lista no componente. */
-  private ownerFieldsResolver(before: string, attrs: ReadonlyMap<string, string>, ctx: TagContext): ((owner: readonly string[]) => readonly string[] | null) | undefined {
-    if (!ctx.typeFields) return undefined;
+  /**
+   * Evidência sobre o dono de um caminho do template: tipo declarado, palavras do dono (com a lista de onde vem a
+   * variável de laço), campos de pessoa física acessados na mesma variável e o handler do gesto (`selecionarBeneficiario`).
+   */
+  private ownerEvidence(html: string, tagEnd: number, attrs: ReadonlyMap<string, string>, ctx: TagContext): OwnerEvidence {
+    const before = html.slice(0, tagEnd);
+    const handlerWords = [...attrs].filter(([name]) => name.startsWith('(')).flatMap(([, value]) => this.words(this.analysis.handlerName(value)).split('-'));
+    const handlerPerson = handlerWords.some((word) => PERSON_WORDS.has(word) || PERSON_WORDS.has(word.replace(/s$/, '')));
     return ([root, ...rest]) => {
       if (!root) return null;
       const list = this.loopSource(before, attrs.get('*ngFor'), root);
-      return ctx.typeFields!([list ?? root, ...rest].join('.'));
+      const path = [list ?? root, ...rest].join('.');
+      // Núcleo de cada segmento (`beneficiarioSelecionado` → beneficiario); `alterarDadosContato` é nome de ação, não entidade.
+      const words = [root, ...path.split('.')].map((segment) => this.words(segment).split('-')[0] ?? '').filter(Boolean);
+      const is = (set: ReadonlySet<string>, word: string): boolean => set.has(word) || set.has(word.replace(/s$/, ''));
+      // A mesma variável com campo de pessoa física em qualquer ponto do template (`x.cpf`, `x.dataNascimento`).
+      const accessed = [...html.matchAll(new RegExp(`(?<![\\w$.])${root.replace(/\$/g, '\\$')}(?:\\s*\\??\\.\\s*[\\w$]+)+`, 'g'))]
+        .some(([chain]) => this.words(chain.split('.').pop()!.trim()).split('-').some((word) => PERSON_IDENTIFIER_WORDS.has(word)));
+      return {
+        fields: ctx.typeFields?.(path) ?? null,
+        person: handlerPerson || accessed || words.some((word) => is(PERSON_WORDS, word)),
+        record: words.some((word) => is(PERSONAL_RECORD_WORDS, word)) || is(PERSONAL_FIELD_WORDS, this.words(root).split('-')[0] ?? ''),
+        thing: words.some((word) => word.length > 2 && !is(GENERIC_OWNER_WORDS, word) && !is(PERSON_WORDS, word) && !is(PERSONAL_RECORD_WORDS, word)),
+      };
     };
   }
 
@@ -244,7 +266,7 @@ export class TemplateTagger {
    * `documento.nomeTipoDocumento` é o nome de um tipo do catálogo; `beneficiario.nome`, `x.name` sem dono conhecido,
    * `usuario.apelido` e `item.valor` são dados da pessoa. Na dúvida (nome sem qualificador) é pessoal.
    */
-  private personalExpression(expression: string, ownerFields?: (owner: readonly string[]) => readonly string[] | null): boolean {
+  private personalExpression(expression: string, evidence?: OwnerEvidence): boolean {
     const code = expression.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, ' ');
     return [...code.matchAll(/[A-Za-z_$][\w$]*(?:\s*[?!]?\.\s*[A-Za-z_$][\w$]*)*/g)].some(([chain]) => {
       // Plural (`beneficiarios`) tem o significado do singular.
@@ -256,18 +278,49 @@ export class TemplateTagger {
       const own = cut < 0 ? field : field.slice(0, cut);
       if (own.some((word) => is(PERSONAL_FIELD_WORDS, word) || is(PERSON_WORDS, word))) return true;
       const named = ['nome', 'name'].includes(own[0] ?? '');
-      // Tipo declarado do dono decide: entidade com documento, nascimento ou contato é pessoa; o resto é coisa.
-      const fields = raw.length > 1 ? ownerFields?.(raw.slice(0, -1)) : null;
-      if (fields) {
-        const person = fields.some((name) => this.words(name).split('-').some((word) => PERSON_IDENTIFIER_WORDS.has(word)));
+      const owner = raw.length > 1 ? evidence?.(raw.slice(0, -1)) : null;
+      // Tipo declarado decide: entidade com documento ou nascimento é pessoa; o resto é coisa.
+      if (owner?.fields) {
+        const person = owner.fields.some((name) => this.words(name).split('-').some((word) => PERSON_IDENTIFIER_WORDS.has(word)));
         return person && cut < 0 && (!named || own.length === 1);
       }
-      // Nome qualificado por algo que não é pessoa (`nomePlano`, `nomeTipoDocumento`) é nome de coisa.
-      if (named) return own.length === 1 && cut < 0;
-      // Dono é a própria pessoa ou um dado pessoal (`beneficiario.apelido`, `endereco.descricao`), não um nome que só
-      // contém a palavra (`alterarDadosContato.label` é um botão).
-      return cut < 0 && segments.some(([first]) => !!first && (is(PERSON_WORDS, first) || is(PERSONAL_FIELD_WORDS, first)));
+      // Classificação (`tipoPlano`) e nome qualificado por coisa (`nomePlano`) são de catálogo.
+      if (cut >= 0 || (named && own.length > 1)) return false;
+      // Membro do próprio componente (`{{ nome }}`, `getNome()`): é o nome de quem usa o app.
+      if (raw.length < 2) return named;
+      // Sem tipo, a evidência do código decide: pessoa ou registro dela é pessoal; substantivo de domínio
+      // (`medicamento`, `clinica`) é coisa; só nomes genéricos (`item`, `select.model.id`) não provam coisa nenhuma.
+      const ownerWords = segments.map((words) => words[0] ?? '').filter(Boolean);
+      const person = owner ? owner.person : ownerWords.some((word) => is(PERSON_WORDS, word));
+      const record = owner ? owner.record : ownerWords.some((word) => is(PERSONAL_RECORD_WORDS, word)) || is(PERSONAL_FIELD_WORDS, segments[0]?.[0] ?? '');
+      if (person || record) return true;
+      const thing = owner ? owner.thing : ownerWords.some((word) => word.length > 2 && !is(GENERIC_OWNER_WORDS, word));
+      return named && !thing;
     });
+  }
+
+  /** Atributos simples e inputs do elemento, nomes que um seletor de diretiva de atributo pode casar. */
+  private attributeNames(attrs: ReadonlyMap<string, string>): string[] {
+    return [...attrs.keys()].map((name) => /^\[?([A-Za-z][\w-]*)\]?$/.exec(name)?.[1]).filter((name): name is string => !!name);
+  }
+
+  private hasDirectiveOutput(attrs: ReadonlyMap<string, string>, ctx: TagContext): boolean {
+    const names = this.attributeNames(attrs);
+    return [...attrs.keys()].some((key) => { const output = /^\(([\w.$]+)\)$/.exec(key)?.[1]; return !!output && !!ctx.catalog.directive?.(names, output); });
+  }
+
+  /** A classe emite o output no próprio código (`this.prop.emit(`): prova de que o gesto nasce na diretiva. */
+  private emitsInCode(def: ComponentDef, output: string): boolean {
+    const property = def.outputs.get(output);
+    if (!property) return false;
+    const call = new RegExp(`\\b${property.replace(/\$/g, '\\$')}\\s*\\.\\s*emit\\s*\\(`);
+    return [...def.methods.values()].some((body) => call.test(body));
+  }
+
+  /** Handler que só descreve o gesto (`ajustaSwipeBsc`) é nomeado pelo único método da classe que ele chama. */
+  private productHandler(handler: string, ctx: TagContext): string {
+    if (!this.words(handler).split('-').some((word) => GESTURE_HANDLER_WORDS.has(word))) return handler;
+    return ctx.methodDelegate?.(handler) ?? handler;
   }
 
   /** Handler que escolhe um valor (`selecionarAgenda`, `escolherPlano`, `onSelect`), não que abre um destino. */
@@ -318,7 +371,7 @@ export class TemplateTagger {
         const field = pathOf.split('.').pop()!;
         const known = ctx.listLabels?.(list!, field);
         // Valor constante do código nunca é pessoal; fora dele, dado pessoal é decisão, não dúvida: a opção não sai.
-        if (!known?.length && this.personalExpression(pathOf, this.ownerFieldsResolver(html.slice(0, tagEnd), attrs, ctx))) continue;
+        if (!known?.length && this.personalExpression(pathOf, this.ownerEvidence(html, tagEnd, attrs, ctx))) continue;
         if (known?.length || /^(?:label|title|titulo|text|texto|rotulo|descricao|description|nome|name)$/.test(field) && !ctx.listItemFields?.(list!)?.some((name) => /(?:^|-)(?:cpf|rg|nascimento)(?:-|$)/.test(this.words(name)))
           || this.publicItemDescriptor(field, ctx.listItemFields?.(list!))
           || !personal(this.words(field)) && !/^(?:id|uuid|codigo|cod|cd|index|indice|key|chave|value|url|link|icon|icone|imagem|image|img|src|rota|route|path|tipo|type|status|ativo|selecionado|selected|disabled|checked)$/i.test(field)) return pathOf;
@@ -549,6 +602,9 @@ export class TemplateTagger {
    * do método (`rotaAnexar`, `irParaPagamento`) é implementação: fica o que a pessoa faz.
    */
   private businessWords(handler: string): string {
+    const all = this.semanticWords(handler, false).split('-');
+    // `voltarPaginaAnterior`, `voltarPagina`: o resto só repete que é a tela anterior.
+    if (all[0] === 'voltar' && all.length > 1 && all.slice(1).every((word) => BACK_REDUNDANT_WORDS.has(word))) return 'voltar';
     const words = this.semanticWords(handler, false).replace(/^(?:rota|route|navegar|navigate|ir|go|redirecionar|redirect)-(?:(?:para|pra|to)-)?(?!(?:para|pra|to)$)(?=.)/, '');
     return words.split('-').filter((word, index) => !index || word !== 'change')
       .map((word) => ACTION_VERBS.get(word) ?? word).join('-');
@@ -944,7 +1000,7 @@ export class TemplateTagger {
       const navigation = trackable && !domBinding && this.isNavigation(tag, attrs);
       if (domBinding || navigation) {
         const expr = domBinding ? attrs.get(domBinding)! : '';
-        const handler = domBinding ? this.analysis.handlerName(expr) : this.ionicOwnAction(tag, attrs) ?? 'navegar';
+        const handler = domBinding ? this.productHandler(this.analysis.handlerName(expr), ctx) : this.ionicOwnAction(tag, attrs) ?? 'navegar';
         const selectionInput = domBinding === '(click)' ? ctx.selectionMethods?.get(handler) : undefined;
         if (label && this.labelBehaviorConflict(label, handler)) {
           diagnostics.push({ code: 'VISIBLE_LABEL_BEHAVIOR_CONFLICT', arquivo: ctx.relFile, linha, mensagem: `texto '${label}' contradiz o handler '${handler}'; ação não reclassificada pelo texto` });
@@ -991,7 +1047,7 @@ export class TemplateTagger {
       }
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
-      if (trackable && this.isCustomElement(tag)) {
+      if (trackable && (this.isCustomElement(tag) || this.hasDirectiveOutput(attrs, ctx))) {
         const previous = prior?.outputs;
         const known = this.decodeOutputIds(attrs.get('data-at-outputs'));
         for (const binding of previous ?? []) if (binding.output) known.set(binding.output, binding.id);
@@ -999,7 +1055,9 @@ export class TemplateTagger {
         for (const [key, expr] of attrs) {
           const output = /^\(([\w.$]+)\)$/.exec(key)?.[1];
           if (!output || (DOM_GESTURES as readonly string[]).includes(key) || TECHNICAL_EVENT.test(output)) continue;
-          const def = ctx.catalog.get(tag, output);
+          // Output de diretiva de atributo no elemento (`<ion-content meuGesto (meuGestoFeito)>`) vale como o de componente.
+          const own = ctx.catalog.get(tag, output);
+          const def = own?.outputs.has(output) ? own : ctx.catalog.directive?.(this.attributeNames(attrs), output) ?? own;
           // two-way binding [(x)] gera a saída xChange: sincroniza estado, não é gesto
           if (output.endsWith('Change') && (def?.inputs.has(output.slice(0, -6)) || attrs.has(`[(${output.slice(0, -6)})]`))) continue;
           // Opt-in por evidência: bindings sem @Output público comprovado não
@@ -1011,6 +1069,8 @@ export class TemplateTagger {
           const triggers: OutputTrigger[] = all.filter((trigger) => !trigger.coveredByChild);
           const overlay = triggers.length === 0 ? this.analysis.modalCloseTrigger(def, output, ctx.catalog) : null;
           if (overlay) triggers.push(overlay);
+          // Diretiva que emite o output no próprio código (gesto reconhecido por ela): o runtime escuta o @Output real.
+          if (triggers.length === 0 && def.attributes?.length && this.emitsInCode(def, output)) triggers.push({ event: `emit:${output}`, selector: ':host' });
           if (def.source === 'projeto' && all.length > 0 && triggers.length === 0) continue;
           // @Output declarado não basta: se nenhum gesto DOM foi comprovado,
           // esta interação está fora do suporte comprovado e é ignorada.
@@ -1030,11 +1090,13 @@ export class TemplateTagger {
             // Sem vínculo observável com o overlay, não há tagueamento seguro.
             continue;
           }
-          const handler = this.analysis.handlerName(expr);
+          const handler = this.productHandler(this.analysis.handlerName(expr), ctx);
           // Título/texto do host descreve o conteúdo, não a navegação do próprio
           // componente: voltar/fechar do header usa a ação, nunca o título da tela.
           const navigation = COMPONENT_NAVIGATION_OUTPUT.test(this.words(this.withoutTagPrefix(output, tag)));
-          const ownLabel = navigation ? '' : label;
+          // Gesto de diretiva no container (swipe na página): o texto da página não nomeia o gesto; a ação nomeia.
+          const gesture = uniqueTriggers.some((trigger) => trigger.event.startsWith('emit:'));
+          const ownLabel = navigation || gesture ? '' : label;
           const name = this.shortName(slug(ownLabel) || this.actionName(handler, expr, this.actionTestId(attrs, ctx), this.withoutTagPrefix(output, tag))) || this.elementoFor(tag, attrs, output);
           const activeOutputs = [...attrs.keys()].filter((attribute) => /^\(([\w.$]+)\)$/.test(attribute) &&
             !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
@@ -1047,7 +1109,7 @@ export class TemplateTagger {
             // Input ligado (`[textoLabel]`) aparece no gatilho; texto projetado chega pelo <ng-content>.
             return labelInput ? new RegExp(`\\{\\{[^}]*\\b${labelInput}\\b[^}]*\\}\\}|="[^"]*\\b${labelInput}\\b[^"]*"`).test(content) : /<ng-content\b/.test(content);
           });
-          const dynamicLabel = !!dynamicSource && !navigation && shows;
+          const dynamicLabel = !!dynamicSource && !navigation && !gesture && shows;
           // Ações distintas do mesmo componente (ver, excluir) não podem chegar iguais ao Firebase.
           const verb = activeOutputs.length > 1 && ownLabel && !dynamicLabel && !rotulos.length
             ? slug(this.semanticWords(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action)-/, '').replace(/^[a-z]+/, (word) => ACTION_VERBS.get(word) ?? word)) : '';
@@ -1056,7 +1118,8 @@ export class TemplateTagger {
           const migratedId = !known.has(output) && activeOutputs.length === 1 &&
             solePriorOutput?.label === rotulo ? solePriorOutput.id : undefined;
           const id = this.claimId(known.get(output) ?? migratedId, `${prefix}-${name}`, ctx, claimed);
-          const elemento = this.elementoFor(tag, attrs, output);
+          // O gesto equivale ao toque no controle da mesma ação (swipe de voltar = botão voltar).
+          const elemento = gesture ? 'botao' : this.elementoFor(tag, attrs, output);
           for (const trigger of uniqueTriggers) outputs.push({ id, rotulo, output, elemento, trigger });
           if (portal) {
             const anchored = portalAnchors.get(anchor) ?? [];

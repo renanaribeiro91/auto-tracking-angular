@@ -185,3 +185,31 @@ export function listItemFields(component: ComponentInfo): (list: string) => read
     return local;
   };
 }
+
+/**
+ * Método que só embrulha outro (uma instrução, um único `this.metodo()` da classe, com ou sem condição) é nomeado pelo
+ * método chamado, seguindo a cadeia: `ajustaSwipe() { this.tema === '' ? this.voltarPagina() : null; }` → `voltarPagina`.
+ * `null` quando o método faz mais de uma coisa ou não chama método da classe.
+ */
+export function methodDelegate(component: ComponentInfo): (method: string) => string | null {
+  return (method) => {
+    let current = method;
+    for (let depth = 0; depth < 4; depth++) {
+      const body = component.methods.get(current);
+      const block = body === undefined ? undefined : ts.createSourceFile('method.ts', `function m() ${body.trim().startsWith('{') ? body : `{ ${body} }`}`, ts.ScriptTarget.Latest, true)
+        .statements[0];
+      const statements = block && ts.isFunctionDeclaration(block) ? block.body?.statements : undefined;
+      if (!statements || statements.length !== 1) break;
+      const called = new Set<string>();
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+          && component.methods.has(node.expression.name.text)) called.add(node.expression.name.text);
+        ts.forEachChild(node, visit);
+      };
+      visit(statements[0]!);
+      if (called.size !== 1) break;
+      current = [...called][0]!;
+    }
+    return current === method ? null : current;
+  };
+}

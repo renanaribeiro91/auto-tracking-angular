@@ -110,6 +110,8 @@ export interface ProjectIndex {
   readonly surfaces?: readonly SurfaceDeclaration[];
   readonly surfaceErrors?: readonly { readonly file: string; readonly line: number; readonly message: string }[];
   readonly components: readonly ComponentInfo[];
+  /** Diretivas de atributo do projeto (`@Directive({ selector: '[x]' })`) com seus outputs. */
+  readonly directives?: readonly ComponentDef[];
   /** Identidades de componentes usados em rotas, sem colisões por nome de classe. */
   readonly routedComponents: ReadonlySet<string>;
   /** Textos que o código comprova para uma expressão do template do componente; `null` se algum caminho só existe em runtime. */

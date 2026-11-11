@@ -23,3 +23,6 @@ export const IONIC_OVERLAY_SELECTOR = 'ion-modal, ion-popover, ion-alert, ion-ac
 
 /** Host de overlay de web component (`ion-modal`, `x-popover`, `ds-bottom-sheet`): o ciclo de vida é derivado do nome. */
 export const OVERLAY_HOST_TAG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:modal|popover|action-sheet|alert|bottom-sheet|sheet|dialog|drawer)$/;
+
+/** Evento do host que representa um @Output emitido pela própria diretiva (`emit:<output>`). */
+export const EMITTED_OUTPUT_PREFIX = 'emit:';

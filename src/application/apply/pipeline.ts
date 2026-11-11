@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
-import { listItemFields, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
+import { listItemFields, methodDelegate, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
 import { typeFields } from './type-fields.js';
 import { routeDataLabels } from './route-data.js';
 import { staticNestedLabels } from './static-values.js';
@@ -211,7 +211,7 @@ export class TrackingPipeline {
           mensagem: `a rota '${route.className}' corresponde a mais de um componente; importe a declaração correta para marcar a tela com segurança`,
         });
       }
-      const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, index.components.map((c) => c.def),
+      const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, [...index.components.map((c) => c.def), ...(index.directives ?? [])],
         (index.overlaySites ?? []).flatMap((site) => [site, ...(site.variantes ?? [])].flatMap((item) => item.componente ?? [])));
       // A árvore de rotas é a escadinha do produto (funcionalidade → subfuncionalidade → tela); pastas só valem sem rota provada.
       const routeScreens = this.routeScreens(index);
@@ -368,6 +368,7 @@ export class TrackingPipeline {
           routeLabels: routeLabelsOf(t.c),
           listItemFields: listItemFields(t.c),
           typeFields: typeFields(t.c),
+          methodDelegate: methodDelegate(t.c),
           usedIds,
           claimedIds,
           attrQuote: t.inline?.quote === '"' ? "'" : '"',

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.0 — 2026-11-11
+
+- Gesto reconhecido em código por diretiva de atributo (de pacote ou do projeto, qualquer nome: o motor lê o seletor e o `emit` da própria classe) é um clique igual ao do controle da mesma ação: `<ion-content [gesto] (esquerda)="voltar()">` envia `voltar`/`botao`/`clique`, como o botão voltar. O runtime se inscreve no `@Output` real da diretiva do host (pelo metadado `ɵdir.outputs`), sem imitar a regra do gesto; sem diretiva no host, nada é enviado. Na planilha, o mesmo evento vindo do botão e do gesto é uma linha só.
+- Handler que só descreve o gesto (`ajustaSwipe`, `handleTouch`) e apenas chama outro método da classe é nomeado pelo método chamado.
+- `voltar` sem redundância: `voltarPaginaAnterior`, `voltarPagina` e `voltarParaTelaAnterior` são `voltar`; destino real (`voltar-inicio`) continua.
+- Pessoa ou coisa sem tipo anotado, decidido pela evidência do código, nesta ordem: tipo declarado; tipo pela origem do valor (`this.x = …` vindo de `subscribe`/`then` de método de serviço injetado com retorno declarado ou `http.get<T>`, `as T`, parâmetro anotado; `pipe` com `map` deixa de ser prova); campo de pessoa física acessado na mesma variável no template (`x.cpf`, `x.dataNascimento`); handler do gesto (`selecionarBeneficiario(x)`); núcleo do nome do dono e da lista do laço. Pessoa, registro dela (`dados`, `anamnese`, respostas), saúde, deficiência e localização nunca saem; substantivo de domínio (`clinica.nome`, `especialidade.nome`) sai; só nomes genéricos (`item`, `select.model.id`) sem nenhuma origem tipada não provam que é coisa, e o rótulo é a ação.
+
 ## 2.5.0 — 2026-11-11
 
 - Texto vindo de input ligado a dado de runtime (`[textoLabel]="documento.nomeTipoDocumento"`, `[title]="item.titulo"`) é rótulo dinâmico: o runtime envia o valor exato da expressão (`[attr.data-at-label]`), sem depender de como o componente monta o DOM; a planilha mostra o nome do dado (`[nome-tipo-documento]`) ou `[rotulo-do-botao-exibido]` quando o campo é genérico.
