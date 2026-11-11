@@ -8,9 +8,9 @@ import type { TrackingSurfaceDefinition } from '../../domain/contract/tracking-s
 import { trackingSurfaceContract } from '../../domain/contract/tracking-surface.js';
 import type { TrackingMode } from '../../config.js';
 import type { TrackingEvent } from '../../config.js';
-import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
+import { CURRENT_SCREEN_ATTRIBUTE, INTERACTIVE_ELEMENT_SELECTOR, OVERLAY_ACTION_SELECTOR, OVERLAY_DISMISS_EVENTS, OVERLAY_HOST_TAG, OVERLAY_KIND, OVERLAY_PRESENT_EVENTS, IONIC_OVERLAY_SELECTOR, NATIVE_DIALOG_SELECTOR, OVERLAY_SELECTOR, OVERLAY_TITLE_SELECTOR, SELECT_OVERLAY_SELECTOR, TRACKED_DOM_EVENTS } from './dom-tracker.constants.js';
 import { DomDiscoveryScheduler } from './dom-discovery-scheduler.js';
-import { screenPath, subfuncionalidadeOf } from '../../domain/contract/screen-binding.js';
+import { decodeScreenRoutes, screenForRoute, screenPath, subfuncionalidadeOf, type ScreenRoute } from '../../domain/contract/screen-binding.js';
 
 export interface DomTrackerDeps {
   /** Host Angular opcional; limita a varredura inicial sem restringir overlays. */
@@ -247,11 +247,31 @@ export class DomEventTracker {
       }
     };
 
-    const onDismiss = (): void => this.settleChoice();
+    /**
+     * Overlay com gestos deste owner nasce na tela visível do próprio owner (a mesma prova da `visualizacao`): o vínculo
+     * vale até o fechamento. Overlay de outro owner nunca herda esta tela; vínculo declarado no código (attach) vence.
+     */
+    const overlayOrigins = new Map<Element, () => void>();
+    const bindOverlay = (overlay: Element): void => {
+      const surfaces = this.deps.surfaces;
+      if (!surfaces || overlayOrigins.has(overlay) || !this.ownsGesturesIn(overlay)) return;
+      const screen = surfaces.capture(this.deps.owner);
+      if (!screen) return;
+      try { overlayOrigins.set(overlay, surfaces.register(overlay, { screen, actions: [] })); } catch { /* já vinculado pelo código */ }
+    };
+    const unbindOverlay = (overlay: unknown): void => {
+      if (!DomEventTracker.isElement(overlay)) return;
+      overlayOrigins.get(overlay)?.();
+      overlayOrigins.delete(overlay);
+    };
+    const onDismiss = (event: Event): void => { this.settleChoice(); unbindOverlay(event.target); };
     const viewed = new WeakSet<Element>();
     const showOverlay = (overlay: unknown): void => {
-      try { if (DomEventTracker.isElement(overlay)) this.emitOverlayView(overlay); }
-      catch (error) { this.warnSafely(`[auto-tracking] visualização ignorada com segurança: ${String(error)}`); }
+      try {
+        if (!DomEventTracker.isElement(overlay)) return;
+        bindOverlay(overlay);
+        this.emitOverlayView(overlay);
+      } catch (error) { this.warnSafely(`[auto-tracking] visualização ignorada com segurança: ${String(error)}`); }
     };
     const onPresent = (event: Event): void => showOverlay(event.target);
     // Diálogo fora do Ionic: uma visualização por instância aberta (o mesmo <dialog> reaberto conta de novo).
@@ -269,7 +289,23 @@ export class DomEventTracker {
       this.document.addEventListener(name, onEvent, true);
       registered.add(name);
     };
+    // Overlay de web component (Ionic e design systems Stencil) segue o ciclo `<prefixo>ModalDidPresent`/`DidDismiss`:
+    // o nome sai do próprio elemento, e só o evento disparado prova a apresentação; sem ele nada muda.
+    const lifecycle = new Set<string>([...OVERLAY_PRESENT_EVENTS, ...OVERLAY_DISMISS_EVENTS]);
+    const watchLifecycle = (element: Element): void => {
+      const kind = OVERLAY_HOST_TAG.exec(element.localName);
+      if (!kind) return;
+      const prefix = element.localName.replace(/-([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase());
+      for (const [name, handler] of [[`${prefix}DidPresent`, onPresent], [`${prefix}DidDismiss`, onDismiss]] as const) {
+        if (lifecycle.has(name)) continue;
+        lifecycle.add(name);
+        this.document.addEventListener(name, handler, true);
+        lifecycleListeners.push([name, handler]);
+      }
+    };
+    const lifecycleListeners: [string, (event: Event) => void][] = [];
     const discover = (element: Element): void => {
+      watchLifecycle(element);
       const mode = this.deps.mode ?? 'classic';
       // Em um documento grande, a grande maioria dos elementos não participa
       // do tracking. Não tentar descompactar tokens nesses elementos.
@@ -293,13 +329,17 @@ export class DomEventTracker {
         for (const record of records) {
           if (record.type === 'attributes' && DomEventTracker.isElement(record.target)) {
             if (record.attributeName === 'open') {
-              if (record.target.hasAttribute('open')) showDialogs(record.target); else viewed.delete(record.target);
+              if (record.target.hasAttribute('open')) showDialogs(record.target); else { viewed.delete(record.target); unbindOverlay(record.target); }
             } else scheduler.changed(record.target);
           }
           for (const node of Array.from(record.addedNodes)) {
             if (!DomEventTracker.isElement(node)) continue;
             scheduler.added(node);
             showDialogs(node);
+          }
+          // Overlay removido sem evento de fechamento não pode manter o vínculo de origem.
+          for (const node of Array.from(record.removedNodes)) if (overlayOrigins.size && DomEventTracker.isElement(node)) {
+            for (const overlay of [...overlayOrigins.keys()]) if (node === overlay || node.contains(overlay)) unbindOverlay(overlay);
           }
         }
       } catch (error) {
@@ -315,6 +355,10 @@ export class DomEventTracker {
       for (const name of OVERLAY_PRESENT_EVENTS) this.document.removeEventListener(name, onPresent, true);
       this.pendingChoice = null;
       registered.clear();
+      for (const [name, handler] of lifecycleListeners) this.document.removeEventListener(name, handler, true);
+      lifecycleListeners.length = 0;
+      for (const unbind of overlayOrigins.values()) unbind();
+      overlayOrigins.clear();
     };
     try {
       // Gestos DOM principais precisam funcionar imediatamente; descoberta
@@ -341,15 +385,27 @@ export class DomEventTracker {
     return stop;
   }
 
-  /** Registra a tela atual e emite screen_view se o marcador pertence a este owner. */
-  emitScreenView(hostSelector: string): boolean {
+  /** Overlay que contém algum gesto marcado deste owner. */
+  private ownsGesturesIn(overlay: Element): boolean {
+    const mode = this.deps.mode ?? 'classic';
+    return mode === 'ref'
+      ? Array.from(overlay.querySelectorAll('[data-at-ref]')).some((element) => DomEventTracker.descriptorOf(element, mode)?.owner === this.deps.owner)
+      : Array.from(overlay.querySelectorAll('[data-at-owner]')).some((element) => element.getAttribute('data-at-owner') === this.deps.owner);
+  }
+
+  /** Registra a tela atual e emite screen_view se o marcador pertence a este owner; `activePattern` é o caminho de rota ativo. */
+  emitScreenView(hostSelector: string, activePattern?: string | null): boolean {
     if (!this.active) return false;
     const marker = DomEventTracker.findScreenMarker(this.document, hostSelector, this.deps.mode ?? 'classic');
     if (!marker) return false;
 
     const descriptor = DomEventTracker.descriptorOf(marker, this.deps.mode ?? 'classic');
-    const screen = descriptor ? { funcionalidade: descriptor.funcionalidade, tela: descriptor.tela } : DomEventTracker.markerScreen(marker);
-    if (!screen || (descriptor?.owner ?? marker.getAttribute('data-at-owner')) !== this.deps.owner) return true;
+    if ((descriptor?.owner ?? marker.getAttribute('data-at-owner')) !== this.deps.owner) return true;
+    const screen = DomEventTracker.screenOfMarker(marker, this.deps.mode ?? 'classic', activePattern ?? null);
+    if (!screen) {
+      this.warnSafely(`[auto-tracking] screen_view ignorado: a rota ativa '${activePattern ?? ''}' não é um dos caminhos provados da tela`);
+      return true;
+    }
     this.document.documentElement.setAttribute(CURRENT_SCREEN_ATTRIBUTE, `${screen.funcionalidade}|${screen.tela}`);
 
     const screenId = descriptor?.screenId ?? marker.getAttribute('data-at-screen')!;
@@ -438,8 +494,7 @@ export class DomEventTracker {
         if (mode === 'ref' ? !this.descriptorOf(marker, mode)?.screenId : !marker.hasAttribute('data-at-screen')) continue;
         const descriptor = this.descriptorOf(marker, mode);
         if (owner && (descriptor?.owner ?? marker.getAttribute('data-at-owner')) !== owner) continue;
-        if (descriptor?.screenId) return { funcionalidade: descriptor.funcionalidade, tela: descriptor.tela };
-        return this.markerScreen(marker);
+        return this.screenOfMarker(marker, mode);
       }
     }
 
@@ -467,11 +522,28 @@ export class DomEventTracker {
     return null;
   }
 
-  static screenForHost(document: Document, selector: string, mode: TrackingMode, owner: string): TrackingScreen | null {
+  static screenForHost(document: Document, selector: string, mode: TrackingMode, owner: string, activePattern?: string | null): TrackingScreen | null {
     const marker = this.findScreenMarker(document, selector, mode, owner);
-    if (!marker) return null;
+    return marker ? this.screenOfMarker(marker, mode, activePattern) : null;
+  }
+
+  /** Telas resolvidas pela rota ativa no screen_view da página roteada em mais de um caminho. */
+  private static readonly routedScreens = new WeakMap<Element, Screen>();
+
+  /**
+   * Tela do marcador. Página roteada em mais de um caminho usa a rota ativa (`activePattern`) ou, nos gestos,
+   * a tela resolvida no seu screen_view; sem prova, não há tela (nunca a do primeiro caminho).
+   */
+  private static screenOfMarker(marker: Element, mode: TrackingMode, activePattern?: string | null): Screen | null {
     const descriptor = this.descriptorOf(marker, mode);
-    return descriptor ? { funcionalidade: descriptor.funcionalidade, tela: descriptor.tela } : this.markerScreen(marker);
+    const routes: readonly ScreenRoute[] = descriptor ? descriptor.routes ?? [] : decodeScreenRoutes(marker.getAttribute('data-at-routes'));
+    if (!routes.length) return descriptor ? { funcionalidade: descriptor.funcionalidade, tela: descriptor.tela } : this.markerScreen(marker);
+    if (activePattern === undefined) return this.routedScreens.get(marker) ?? null;
+    const route = screenForRoute(routes, activePattern);
+    if (!route) return null;
+    const screen = { funcionalidade: route.funcionalidade, tela: route.tela };
+    this.routedScreens.set(marker, screen);
+    return screen;
   }
 
   private emitClick(event: Event, hit: Hit): void {
@@ -762,26 +834,37 @@ export class DomEventTracker {
   private static currentLabel(element: Element): string {
     let text = ['aria-label', 'label', 'title'].map((name) => element.getAttribute(name)).find((value) => !!value?.trim()) ?? '';
     if (!text) {
-      const decorative = (node: Node): boolean => {
+      const hidden = (node: Node): boolean => {
         for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
-          if (parent.hasAttribute('slot') || parent.hasAttribute('hidden') || parent.getAttribute('aria-hidden') === 'true'
+          if (parent.hasAttribute('hidden') || parent.getAttribute('aria-hidden') === 'true'
             || ['script', 'style', 'option', 'ion-select-option'].includes(parent.localName)) return true;
         }
         return false;
       };
-      // O rótulo pode ser composto de vários spans; opções/slots não fazem parte dele.
+      /** Slot do texto dentro do elemento; `null` quando é conteúdo principal. */
+      const slotOf = (node: Node): string | null => {
+        for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) if (parent.hasAttribute('slot')) return parent.getAttribute('slot');
+        return null;
+      };
+      // O rótulo pode ser composto de vários spans. Texto principal vence slots (badge, ícone); só com todo o texto em
+      // slots (card de web component com `slot="content"`) vale o slot de maior conteúdo.
       const walker = element.ownerDocument.createTreeWalker(element, 4 /* SHOW_TEXT */,
-        { acceptNode: (node) => decorative(node) || !node.nodeValue?.trim() ? 3 /* FILTER_SKIP */ : 1 /* FILTER_ACCEPT */ });
-      const parts: string[] = [];
-      for (let node = walker.nextNode(); node && parts.length < 200; node = walker.nextNode()) parts.push(node.nodeValue!.trim());
-      text = parts.join(' ');
+        { acceptNode: (node) => hidden(node) || !node.nodeValue?.trim() ? 3 /* FILTER_SKIP */ : 1 /* FILTER_ACCEPT */ });
+      const groups = new Map<string | null, string[]>();
+      for (let node = walker.nextNode(), count = 0; node && count < 200; node = walker.nextNode(), count++) {
+        const slot = slotOf(node);
+        groups.set(slot, [...(groups.get(slot) ?? []), node.nodeValue!.trim()]);
+      }
+      const main = groups.get(null) ?? [...groups.values()].sort((a, b) => b.join(' ').length - a.join(' ').length)[0] ?? [];
+      text = main.join(' ');
     }
     return /@|\d(?:[.\-\/ ]?\d){5,}/.test(text) ? '' : labelSlug(text);
   }
 
   /** Título público do overlay (aria-labelledby, aria-label ou cabeçalho visível); sem título, o tipo do overlay. */
   private static overlayContext(overlay: Element, target: Element): string {
-    return DomEventTracker.overlayTitle(overlay, target) || DomEventTracker.overlayKind(overlay);
+    // Tipo do overlay já vai em `elemento`; no rótulo seria termo técnico (`ok-modal`).
+    return DomEventTracker.overlayTitle(overlay, target) || DomEventTracker.overlayName(overlay);
   }
 
   private static overlayTitle(overlay: Element, target?: Element): string {
@@ -860,7 +943,8 @@ export class DomEventTracker {
   }
 
   static baseParams(screen: Screen, environment: string, product: string): Params {
-    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, ...(subfuncionalidadeOf(screen.funcionalidade, screen.tela) ? { subfuncionalidade: screen.tela } : {}),
+    const subfuncionalidade = subfuncionalidadeOf(screen.funcionalidade, screen.tela);
+    return { ambiente: environment, produto: product, funcionalidade: screen.funcionalidade, ...(subfuncionalidade ? { subfuncionalidade } : {}),
       tela: `${environment}:${product}:${screenPath(screen.funcionalidade, screen.tela)}` };
   }
 }
@@ -869,5 +953,5 @@ export const resolveHit = (event: Event, mode: TrackingMode = 'classic'): Hit | 
 export const screenOf = (event: Event, document: Document): Screen | null => DomEventTracker.screenOf(event, document);
 export const findScreenMarker = (document: Document, selector: string): Element | null => DomEventTracker.findScreenMarker(document, selector);
 export const installDomTracker = (document: Document, deps: DomTrackerDeps): (() => void) => new DomEventTracker(document, deps).install();
-export const emitScreenView = (document: Document, selector: string, deps: DomTrackerDeps): boolean =>
-  new DomEventTracker(document, deps).emitScreenView(selector);
+export const emitScreenView = (document: Document, selector: string, deps: DomTrackerDeps, activePattern?: string | null): boolean =>
+  new DomEventTracker(document, deps).emitScreenView(selector, activePattern);

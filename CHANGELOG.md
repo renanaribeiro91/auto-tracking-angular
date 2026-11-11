@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.0 — 2026-11-10
+
+- Escadinha pela rota em qualquer arquitetura Angular/Ionic (NgModule, standalone, lazy, constantes, barrel): `funcionalidade` é o 1º nível, `subfuncionalidade` o 2º e `tela` o caminho inteiro, com nome de produto (sem versão do código, tecnologia, estrutura de UI ou prefixo repetido do pai).
+- Página usada em várias rotas sai com a tela da rota ativa; rota filha com outro componente nunca vira a tela do pai; layout que só embrulha o outlet não é tela e o clique dele sai na tela filha onde a pessoa está.
+- Rótulos sem termo técnico: estrutura de UI, inglês do código, navegação no começo do método e sufixo `Action` saem; ação de modal soma o título sem repetir; ações iguais em blocos diferentes levam o nome do bloco.
+- Rótulos provados pelo código em mais casos: `data` da rota (com a herança e o padrão da versão do Angular, resolvers e input binding) e listas constantes transformadas por `map`/`filter`/spread em laço aninhado. Cada tela lista só o que pode aparecer.
+- Cliques dentro de modais com template (inline ou abertos por código) e de modais de design system em web component saem com a tela de onde o modal foi aberto; texto de card de web component em slot é lido no clique.
+- Planilha: resumo centralizado e legível fora do Numbers; o mesmo evento vindo de vários pontos do código é uma linha com todas as origens.
+- Hooks git com 3 linhas no app: o bloco só chama `hooks/hook.sh` da lib, que acha o Node e faz o resto; `hooks install` recusa diretório de hooks global.
+
 ## 2.3.8 — 2026-11-09
 
 - A planilha não tem coluna Tab bar: o clique na tab bar é uma linha da sua tela, como qualquer outro. O evento não muda.

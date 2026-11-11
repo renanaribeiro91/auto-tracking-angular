@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { OVERLAY_HOST_TAG } from '../../src/adapters/runtime/dom-tracker.constants.js';
 import { AutoTrackingSurfaces, installDomTracker, emitScreenView, type DomTrackerDeps } from '../../src/adapters/runtime/dom-tracker.js';
 import { examplePreset } from '../fixtures/preset/index.js';
 import type { TrackingEvent } from '../../src/config.js';
@@ -83,6 +84,80 @@ describe('runtime: interação compartilhada exige origem comprovada', () => {
     expect(sent).toEqual([clickPayload('outra', 'confirmar')]);
     detach(); click(); await flush();
     expect(sent).toHaveLength(1);
+  });
+
+  const present = (name = 'ionModalDidPresent') => document.querySelector('ion-modal')!.dispatchEvent(new Event(name, { bubbles: true }));
+  const dismiss = () => document.querySelector('ion-modal')!.dispatchEvent(new Event('ionModalDidDismiss', { bubbles: true }));
+
+  it('modal com template do owner, ao ser apresentado, nasce na tela visível do owner até fechar', async () => {
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${ref()}">Confirmar</button></ion-modal>`;
+    install(new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' })));
+    click(); await flush();
+    expect(sent).toEqual([]); // antes de apresentar não há prova da origem
+    present(); click(); await flush();
+    expect(sent.filter((event) => event.name === 'click')).toEqual([clickPayload('documentos', 'confirmar')]);
+    sent.length = 0; dismiss(); click(); await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('modal só com gestos de outro owner, ou sem a tela do owner, não herda tela', async () => {
+    const other = encodeTrackingToken({ owner: 'outro', funcionalidade: 'x', tela: 'y', requireOrigin: true,
+      click: { id: 'alheio', event: 'click', elemento: 'botao', rotulo: 'alheio' } });
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${other}">Alheio</button></ion-modal>`;
+    install(new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' })));
+    present(); click(); await flush();
+    expect(sent).toEqual([]);
+    stop?.();
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${ref()}">Confirmar</button></ion-modal>`;
+    install(new AutoTrackingSurfaces('mob', () => null));
+    present(); click(); await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('overlay de design system (web component) com o ciclo <prefixo>ModalDidPresent vale igual ao Ionic, inclusive criado depois', async () => {
+    install(new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' })));
+    document.body.innerHTML = `<ds-modal><div class="conteudo"><button id="action" data-at-ref="${ref()}">Confirmar</button></div></ds-modal>`;
+    await flush();
+    const modal = document.querySelector('ds-modal')!;
+    click(); await flush();
+    expect(sent).toEqual([]);
+    modal.dispatchEvent(new CustomEvent('dsModalDidPresent', { bubbles: true, composed: true }));
+    click(); await flush();
+    expect(sent.filter((event) => event.name === 'click')).toEqual([clickPayload('documentos', 'confirmar')]);
+    sent.length = 0;
+    modal.dispatchEvent(new CustomEvent('dsModalDidDismiss', { bubbles: true, composed: true }));
+    click(); await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('só host de overlay de web component ganha ciclo de vida derivado do nome', () => {
+    for (const tag of ['ion-modal', 'ds-modal', 'acme-ui-bottom-sheet', 'ion-action-sheet', 'x-popover']) expect(OVERLAY_HOST_TAG.test(tag)).toBe(true);
+    for (const tag of ['ds-modal-card', 'modal', 'app-card', 'lib-modal-service-x']) expect(OVERLAY_HOST_TAG.test(tag)).toBe(false);
+  });
+
+  it('overlay removido sem evento de fechamento perde o vínculo', async () => {
+    install(new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' })));
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${ref()}">Confirmar</button></ion-modal>`;
+    await flush();
+    present();
+    const modal = document.querySelector('ion-modal')!;
+    modal.remove();
+    await flush();
+    document.body.append(modal); // mesmo modal de volta, sem nova apresentação
+    await flush();
+    click(); await flush();
+    expect(sent.filter((event) => event.name === 'click')).toEqual([]);
+  });
+
+  it('vínculo declarado no código vence o da apresentação e reabrir o mesmo modal não quebra', async () => {
+    document.body.innerHTML = `<ion-modal><button id="action" data-at-ref="${ref()}">Confirmar</button></ion-modal>`;
+    const surfaces = new AutoTrackingSurfaces('mob', () => ({ funcionalidade: 'reembolso', tela: 'documentos' }));
+    install(surfaces);
+    const detach = surfaces.register(document.querySelector('ion-modal')!, { screen: { funcionalidade: 'reembolso', tela: 'documentos' }, actions: [] });
+    present(); dismiss(); present(); click(); await flush();
+    expect(sent.filter((event) => event.name === 'click')).toEqual([clickPayload('documentos', 'confirmar')]);
+    expect(warnings.filter((message) => message.includes('ignorad'))).toEqual([]);
+    detach();
   });
 });
 
@@ -218,6 +293,19 @@ describe('runtime: emissão no formato do Builder do time', () => {
     await flush();
     expect(fed.map((event) => event.params['rotulo'])).toEqual(['orientacao-do-reembolso', 'solicitar-reembolso']);
     expect(JSON.stringify(fed)).not.toMatch(/1234|novo/);
+  });
+
+  it('rótulo dinâmico todo em slot (card de web component) usa o slot de conteúdo, nunca o badge', async () => {
+    stops.forEach((stop) => stop()); stops = [];
+    const page = document.querySelector('app-tipo')!;
+    const token = encodeTrackingToken({ owner: 'mfe-exemplo', funcionalidade: 'reembolso', tela: 'opcoes-reembolso',
+      outputs: [{ id: 'card-programa', event: 'click', selector: ':host', label: 'card', output: 'click' }], rotuloDinamico: ['card-programa'] });
+    page.insertAdjacentHTML('beforeend', `<ds-card id="card-slot" data-at-ref="${token}"><ds-badge slot="top">Novo</ds-badge>`
+      + '<div slot="content"><ds-text>Orientação</ds-text><ds-text>Programa de nutrição</ds-text></div></ds-card>');
+    stops = [installDomTracker(document, { ...deps('mfe-exemplo', fed), mode: 'ref' })];
+    click('#card-slot ds-text');
+    await flush();
+    expect(fed.map((event) => event.params['rotulo'])).toEqual(['orientacao-programa-de-nutricao']);
   });
 
   it('modo ref: opção ambígua não é inventada', async () => {

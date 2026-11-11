@@ -8,8 +8,7 @@ describe('hooks git: bloco gerenciado pela lib', () => {
   it('cria hook novo e é idempotente', () => {
     const created = upsertHookBlock(null, 'pre-commit');
     expect(created.startsWith('#!/bin/sh\n')).toBe(true);
-    expect(created).toContain('auto_tracking_executar pre-commit || exit 1');
-    expect(created).toContain('# pre-commit: Atualiza o tagueamento');
+    expect(created).toContain('hooks/hook.sh" pre-commit "$auto_tracking_projeto" || exit 1');
     expect(upsertHookBlock(created, 'pre-commit')).toBe(created);
   });
 
@@ -19,7 +18,7 @@ describe('hooks git: bloco gerenciado pela lib', () => {
     const lines = result.split('\n');
     expect(lines[1]).toContain('husky.sh');
     expect(lines[2]).toContain('# >>> auto-tracking');
-    expect(result.indexOf('auto_tracking_executar pre-push')).toBeLessThan(result.indexOf('exit 0'));
+    expect(result.indexOf('hook.sh" pre-push')).toBeLessThan(result.indexOf('exit 0'));
     expect(result).toContain('npx eslint');
   });
 
@@ -57,6 +56,46 @@ describe('hooks git: bloco gerenciado pela lib', () => {
       expect(check('>=2.0.0', '2.9.9')).toBeNull();
       expect(check('latest', '1.0.0')).toBeNull();
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('bloco de 3 linhas só chama a lib; achar o Node e conferir a versão ficam na lib, publicada com o script', () => {
+    for (const hook of ['pre-commit', 'pre-push'] as const) {
+      const lines = hookBlock(hook).split('\n');
+      expect(lines.slice(1, -1)).toHaveLength(3);
+      expect(lines.join('\n')).not.toMatch(/node -e|nvm|PATH=/);
+      expect(spawnSync('sh', ['-n'], { input: lines.join('\n'), encoding: 'utf8' }).status).toBe(0);
+    }
+    expect((JSON.parse(fs.readFileSync('package.json', 'utf8')) as { files: string[] }).files).toContain('hooks');
+    expect(spawnSync('sh', ['-n', 'hooks/hook.sh'], { encoding: 'utf8' }).status).toBe(0);
+  });
+
+  it('lib sem o script (anterior ao bloco), sob `sh -e`: pede npm install e para o commit', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-sem-lib-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      const run = spawnSync('sh', ['-e'], { cwd: dir, input: `${hookBlock('pre-commit')}\necho continuou`, encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('execute npm install');
+      expect(run.stdout).not.toContain('continuou');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('sem Node em lugar nenhum, o script da lib explica e falha em vez de seguir calado', () => {
+    const noNode = `command() { return 1; }\nHOME="${os.tmpdir()}/sem-home"\nNVM_DIR="${os.tmpdir()}/sem-nvm"\n${fs.readFileSync('hooks/hook.sh', 'utf8')}`;
+    const run = spawnSync('sh', ['-s', '--', 'pre-commit', os.tmpdir()], { input: noNode, encoding: 'utf8' });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Node.js não encontrado no PATH do Git');
+  });
+
+  it('bloco antigo (versão inline) é atualizado no lugar, preservando o resto do hook', () => {
+    const legacy = ['#!/usr/bin/env sh', '. "$(dirname -- "$0")/_/husky.sh"', '# >>> auto-tracking (gerado por `auto-tracking hooks install`; não editar dentro do bloco)',
+      'auto_tracking_localizar_node() { :; }', "  node -e 'const fs=require(\"fs\")' \"$auto_tracking_projeto\" || return 1", 'auto_tracking_localizar_node && auto_tracking_executar pre-commit || exit 1',
+      '# <<< auto-tracking', 'npx eslint'].join('\n');
+    const result = upsertHookBlock(legacy, 'pre-commit');
+    expect(result).toContain(hookBlock('pre-commit'));
+    expect(result).not.toContain('node -e');
+    expect(result.startsWith('#!/usr/bin/env sh\n. "$(dirname -- "$0")/_/husky.sh"\n')).toBe(true);
+    expect(result.endsWith('npx eslint')).toBe(true);
   });
 
   it('monorepo: o bloco aponta para a pasta do app dentro do repositório', () => {
@@ -106,7 +145,7 @@ describe('hooks git: fluxo real de commit e push', () => {
     git('add', '-A');
     const declared = commit('feat: tela');
     expect(declared.status).not.toBe(0);
-    expect(declared.stderr).toContain(`lib instalada (${libVersion}) difere da declarada (^99.0.0)`);
+    expect(declared.stdout + declared.stderr).toContain(`instalado ${libVersion}, mas o package.json pede ^99.0.0: execute npm install`);
     expect(git('show', ':src/app.html')).not.toContain('data-at-ref='); // nada gerado pela versão errada
 
     expect(spawnSync('sh', ['.githooks/pre-push'], { cwd: root, encoding: 'utf8' }).status).not.toBe(0);
@@ -135,10 +174,25 @@ describe('hooks git: fluxo real de commit e push', () => {
     expect(unknown.stdout + unknown.stderr).toMatch(/execute npm install/i);
   });
 
+  it('core.hooksPath fora do repositório (global): recusa instalar e não toca em nada', () => {
+    const global = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hooks-globais-')));
+    try {
+      fs.writeFileSync(path.join(global, 'pre-commit'), '#!/bin/sh\necho global\n');
+      git('config', 'core.hooksPath', global);
+      const install = cli('hooks', 'install');
+      expect(install.status).not.toBe(0);
+      expect(install.stdout + install.stderr).toContain('afetaria todos os repositórios');
+      expect(fs.readFileSync(path.join(global, 'pre-commit'), 'utf8')).toBe('#!/bin/sh\necho global\n');
+      expect(fs.existsSync(path.join(global, 'pre-push'))).toBe(false);
+    } finally {
+      fs.rmSync(global, { recursive: true, force: true });
+    }
+  });
+
   it('instala, gera no commit, deixa commit sem mudança intacto e protege edição não preparada e o push', () => {
     const install = cli('hooks', 'install');
     expect(install.status).toBe(0);
-    expect(fs.readFileSync(path.join(root, '.githooks/pre-commit'), 'utf8')).toContain('auto_tracking_executar pre-commit');
+    expect(fs.readFileSync(path.join(root, '.githooks/pre-commit'), 'utf8')).toContain('hook.sh" pre-commit');
     expect(fs.readFileSync(path.join(root, '.gitattributes'), 'utf8')).toContain('.githooks/* text eol=lf');
     expect(cli('hooks', 'install').status).toBe(0); // idempotente
     const status = cli('hooks', 'status');
@@ -152,6 +206,9 @@ describe('hooks git: fluxo real de commit e push', () => {
     git('add', '-A');
     const first = commit('feat: tela');
     expect(first.status).toBe(0);
+    // Husky executa o hook com `sh -e`: o bloco vai até a lib sem abortar no meio, mesmo sem nvm instalado.
+    const strict = spawnSync('sh', ['-e', '.githooks/pre-push'], { cwd: root, encoding: 'utf8', env: { ...process.env, HOME: root, NVM_DIR: path.join(root, 'sem-nvm') }, input: '' });
+    expect(strict.status).toBe(0);
     expect(first.stderr).toContain('incluídos neste commit');
     expect(git('show', 'HEAD:src/app.html')).toContain('data-at-ref=');
     expect(git('ls-files', '.auto-tracking')).toBe('');

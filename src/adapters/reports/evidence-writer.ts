@@ -152,10 +152,16 @@ export class EvidenceWorkbookWriter {
       (a, b) => a.modulo.localeCompare(b.modulo) || a.tela.localeCompare(b.tela) || b.evento.localeCompare(a.evento) || a.id.localeCompare(b.id),
     );
     // Uma linha por evento que chega ao Firebase; todos os pontos do código continuam no relatorio.json.
+    // A linha lista todas as origens do mesmo evento: quem lê sabe cada ponto do código que o dispara.
     const distinct = new Map<string, Row>();
     for (const row of rows) {
       const key = JSON.stringify([row.modulo, row.tela, row.evento, row.acao, row.elemento, row.rotulo, row.opcaoSelecionada]);
-      if (!distinct.has(key)) distinct.set(key, row);
+      const first = distinct.get(key);
+      if (!first) { distinct.set(key, row); continue; }
+      const lines = String(first.linha).split('; ');
+      if (first.arquivo.split('; ').some((file, index) => file === row.arquivo && lines[index] === String(row.linha))) continue;
+      distinct.set(key, { ...first, origem: first.origem.split('; ').includes(row.origem) ? first.origem : `${first.origem}; ${row.origem}`,
+        arquivo: `${first.arquivo}; ${row.arquivo}`, linha: `${first.linha}; ${row.linha}` });
     }
     return [...distinct.values()];
   }
@@ -205,28 +211,28 @@ export class EvidenceWorkbookWriter {
 
     summary.getRow(1).height = WORKBOOK_LAYOUT.rowHeights.summaryTitle;
     summary.mergeCells(WORKBOOK_LAYOUT.summaryHeaderRange);
-    summary.getCell('B1').value = WORKBOOK_LAYOUT.summaryTitle;
-    summary.getCell('B1').font = { bold: true, size: WORKBOOK_LAYOUT.fontSizes.summaryTitle, color: { argb: brandColor } };
-    this.center(summary.getCell('B1'));
+    summary.getCell('A1').value = WORKBOOK_LAYOUT.summaryTitle;
+    summary.getCell('A1').font = this.font({ bold: true, size: WORKBOOK_LAYOUT.fontSizes.summaryTitle, color: { argb: brandColor } });
+    this.center(summary.getCell('A1'));
     if (logo !== null) summary.addImage(logo, { tl: { col: WORKBOOK_LAYOUT.logo.summaryLeft, row: WORKBOOK_LAYOUT.logo.top }, ext: { width: WORKBOOK_LAYOUT.logo.summaryWidth, height: WORKBOOK_LAYOUT.logo.summaryHeight } });
 
     summary.mergeCells(WORKBOOK_LAYOUT.summarySubtitleRange);
-    summary.getCell('B2').value = WORKBOOK_LAYOUT.summarySubtitle.replace('{owner}', input.owner).replace('{product}', input.product);
-    summary.getCell('B2').font = { size: WORKBOOK_LAYOUT.fontSizes.subtitle, color: { argb: WORKBOOK_COLORS.gray } };
-    this.center(summary.getCell('B2'));
+    summary.getCell('A2').value = WORKBOOK_LAYOUT.summarySubtitle.replace('{owner}', input.owner).replace('{product}', input.product);
+    summary.getCell('A2').font = this.font({ size: WORKBOOK_LAYOUT.fontSizes.subtitle, color: { argb: WORKBOOK_COLORS.gray } });
+    this.center(summary.getCell('A2'));
     summary.getRow(2).height = WORKBOOK_LAYOUT.rowHeights.summarySubtitle;
 
     this.writeIndicators(summary, rows, modules, brandColor);
     summary.mergeCells(WORKBOOK_LAYOUT.summaryDetailsRange);
-    summary.getCell('B5').value = WORKBOOK_LAYOUT.screenNote.replace('{product}', input.product);
-    summary.getCell('B5').font = { italic: true, size: WORKBOOK_LAYOUT.fontSizes.note, color: { argb: WORKBOOK_COLORS.gray } };
-    this.center(summary.getCell('B5'));
+    summary.getCell('A5').value = WORKBOOK_LAYOUT.screenNote.replace('{product}', input.product);
+    summary.getCell('A5').font = this.font({ italic: true, size: WORKBOOK_LAYOUT.fontSizes.note, color: { argb: WORKBOOK_COLORS.gray } });
+    this.center(summary.getCell('A5'));
     summary.getRow(5).height = WORKBOOK_LAYOUT.rowHeights.summaryDetails;
 
     summary.mergeCells(WORKBOOK_LAYOUT.summaryNavigationRange);
-    summary.getCell('B6').value = WORKBOOK_LAYOUT.moduleNavigation;
-    summary.getCell('B6').font = { bold: true, color: { argb: WORKBOOK_COLORS.gray } };
-    this.center(summary.getCell('B6'));
+    summary.getCell('A6').value = WORKBOOK_LAYOUT.moduleNavigation;
+    summary.getCell('A6').font = this.font({ bold: true, color: { argb: WORKBOOK_COLORS.gray } });
+    this.center(summary.getCell('A6'));
     this.header(summary, WORKBOOK_LAYOUT.summaryFrozenRows, WORKBOOK_LAYOUT.moduleIndexHeaders, WORKBOOK_LAYOUT.moduleIndexColumn, brandColor);
     this.writeModuleIndex(summary, rows, modules, names, brandColor);
   }
@@ -242,9 +248,9 @@ export class EvidenceWorkbookWriter {
       const labelCell = summary.getRow(WORKBOOK_LAYOUT.summaryRows.indicatorLabels).getCell(WORKBOOK_LAYOUT.moduleIndexColumn + index);
       const valueCell = summary.getRow(WORKBOOK_LAYOUT.summaryRows.indicatorValues).getCell(WORKBOOK_LAYOUT.moduleIndexColumn + index);
       labelCell.value = WORKBOOK_LAYOUT.indicatorLabels[index];
-      labelCell.font = { bold: true, color: { argb: WORKBOOK_COLORS.gray } };
+      labelCell.font = this.font({ bold: true, color: { argb: WORKBOOK_COLORS.gray } });
       valueCell.value = value;
-      valueCell.font = { bold: true, size: WORKBOOK_LAYOUT.fontSizes.indicatorValue, color: { argb: brandColor } };
+      valueCell.font = this.font({ bold: true, size: WORKBOOK_LAYOUT.fontSizes.indicatorValue, color: { argb: brandColor } });
       for (const cell of [labelCell, valueCell]) {
         this.center(cell);
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: WORKBOOK_COLORS.zebra } };
@@ -299,7 +305,7 @@ export class EvidenceWorkbookWriter {
     const lastColumn = MODULE_WORKSHEET_COLUMNS.length;
     sheet.mergeCells(WORKBOOK_LAYOUT.moduleRows.title, 1, WORKBOOK_LAYOUT.moduleRows.title, lastColumn - 2);
     sheet.getCell(WORKBOOK_LAYOUT.moduleRows.title, 1).value = `Módulo: ${this.titleCase(module)}`;
-    sheet.getCell(WORKBOOK_LAYOUT.moduleRows.title, 1).font = { bold: true, size: WORKBOOK_LAYOUT.fontSizes.moduleTitle, color: { argb: brandColor } };
+    sheet.getCell(WORKBOOK_LAYOUT.moduleRows.title, 1).font = this.font({ bold: true, size: WORKBOOK_LAYOUT.fontSizes.moduleTitle, color: { argb: brandColor } });
     sheet.getCell(WORKBOOK_LAYOUT.moduleRows.title, 1).alignment = { vertical: 'middle', indent: 1 };
     sheet.getRow(WORKBOOK_LAYOUT.moduleRows.title).height = WORKBOOK_LAYOUT.rowHeights.moduleTitle;
     if (logo !== null) sheet.addImage(logo, { tl: { col: lastColumn - 2.4, row: WORKBOOK_LAYOUT.logo.top }, ext: { width: WORKBOOK_LAYOUT.logo.moduleWidth, height: WORKBOOK_LAYOUT.logo.moduleHeight } });
@@ -333,7 +339,7 @@ export class EvidenceWorkbookWriter {
     labels.forEach((label, index) => {
       const cell = row.getCell(firstColumn + index);
       cell.value = label;
-      cell.font = { bold: true, color: { argb: WORKBOOK_COLORS.white } };
+      cell.font = this.font({ bold: true, color: { argb: WORKBOOK_COLORS.white } });
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: brandColor } };
       cell.alignment = { vertical: 'middle', horizontal: index === 0 ? 'left' : 'center' };
     });
@@ -354,13 +360,18 @@ export class EvidenceWorkbookWriter {
     return Math.min(max, Math.max(min, ...values.map((value) => String(value ?? '').length + WORKBOOK_LAYOUT.columnWidth.padding)));
   }
 
+  /** Toda fonte declara nome e tamanho: leitores fora do Excel/Numbers não aplicam o padrão da pasta a fontes incompletas. */
+  private font(style: Partial<ExcelCell['font']>): Partial<ExcelCell['font']> {
+    return { name: WORKBOOK_LAYOUT.fontName, size: WORKBOOK_LAYOUT.fontSizes.body, ...style };
+  }
+
   private center(cell: ExcelCell): void {
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   }
 
   private link(cell: ExcelCell, sheet: string, text: string, brandColor: string): void {
     cell.value = { text, hyperlink: `#'${sheet}'!A1` };
-    cell.font = { color: { argb: brandColor }, underline: true };
+    cell.font = this.font({ color: { argb: brandColor }, underline: true });
   }
 
   /** Reescreve hyperlinks como referências internas válidas para Excel e Numbers. */
@@ -369,15 +380,29 @@ export class EvidenceWorkbookWriter {
     const zip = await JSZip.loadAsync(xlsx);
     const worksheetFiles = Object.keys(zip.files).filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/.test(name));
 
+    // Texto de cada shared string, já escapado para XML.
+    const sharedStrings = [...((await zip.file('xl/sharedStrings.xml')?.async('string')) ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)]
+      .map((item) => [...item[1]!.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map((text) => text[1]).join(''));
     for (const name of worksheetFiles) {
       const ids: string[] = [];
-      const xml = (await zip.file(name)!.async('string')).replace(
+      const texts = new Map<string, string>();
+      let xml = (await zip.file(name)!.async('string')).replace(
         /<hyperlink ref="([A-Z]+\d+)" r:id="(rId\d+)" location="#([^"]*)"\s*\/>/g,
         (_match, ref: string, id: string, location: string) => {
           ids.push(id);
           return `<hyperlink ref="${ref}" location="${location}"/>`;
         },
       );
+      // O texto do link fica na própria célula e no `display`: leitores que convertem o link sem resolver o índice
+      // de shared string mostravam o número (8, 9…) no lugar do nome do módulo.
+      xml = xml.replace(/<c r="([A-Z]+\d+)"([^>]*?) t="s"><v>(\d+)<\/v><\/c>/g, (cell, ref: string, attributes: string, index: string) => {
+        if (!new RegExp(`<hyperlink ref="${ref}" `).test(xml)) return cell;
+        const text = sharedStrings[Number(index)];
+        if (text === undefined) return cell;
+        texts.set(ref, text);
+        return `<c r="${ref}"${attributes} t="inlineStr"><is><t xml:space="preserve">${text}</t></is></c>`;
+      }).replace(/<hyperlink ref="([A-Z]+\d+)" location="([^"]*)"\/>/g, (link, ref: string, location: string) =>
+        texts.has(ref) ? `<hyperlink ref="${ref}" location="${location}" display="${texts.get(ref)!.replace(/"/g, '&quot;')}"/>` : link);
       zip.file(name, xml);
       await this.removeExternalHyperlinkRelations(zip, name, ids);
     }

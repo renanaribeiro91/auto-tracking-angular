@@ -49,7 +49,7 @@ describe('clique de overlay sem template no projeto: planilha igual ao runtime',
   const labels = (page: string) => clicksOf(page).map((entry) => [entry.elemento, entry.rotulo, entry.telas]);
   const screens = ['p:p'];
 
-  it('versão do código sai do módulo, salvo quando as duas gerações convivem', () => {
+  it('versão do código nunca chega ao módulo: as duas gerações do fluxo são o mesmo módulo de produto', () => {
     for (const name of ['login-v2', 'conta', 'conta-v2']) {
       const cls = name.replace(/(^|-)(\w)/g, (_m, _d, c: string) => c.toUpperCase());
       write(`src/pages/${name}/${name}.page.ts`, `@Component({selector:'app-${name}', templateUrl:'./${name}.page.html'}) export class ${cls}Page {}`);
@@ -59,8 +59,7 @@ describe('clique de overlay sem template no projeto: planilha igual ao runtime',
       export const r = [{ path: 'l', component: LoginV2Page }, { path: 'c', component: ContaPage }, { path: 'd', component: ContaV2Page }];`);
     const modulos = new TrackingPipelineFactory().create().runPipeline(root, path.join(root, 'auto-tracking.config.ts')).entries
       .filter((entry) => entry.evento === 'screen_view').map((entry) => entry.funcionalidade);
-    expect(modulos).toEqual(expect.arrayContaining(['login', 'conta', 'conta-v2']));
-    expect(modulos).not.toContain('login-v2');
+    expect([...new Set(modulos)].sort()).toEqual(['conta', 'login']);
   });
 
   it('método de serviço sem chamada não lista overlay; o chamado aparece na tela de quem chama', () => {
@@ -94,7 +93,7 @@ describe('clique de overlay sem template no projeto: planilha igual ao runtime',
       buttons: a ? [{ text: 'Cancelar', role: 'cancel' }, 'Excluir'] : ['Voltar'] }); }`))
       .toEqual([['alerta', 'cancelar-excluir', screens], ['alerta', 'excluir', screens], ['alerta', 'voltar-excluir', screens]]);
     expect(labels(`abrir() { return this.actionSheetCtrl.create({ buttons: [{ text: 'Câmera' }, { text: 'Galeria' }] }); }`))
-      .toEqual([['menu-de-opcoes', 'camera-menu-de-opcoes', screens], ['menu-de-opcoes', 'galeria-menu-de-opcoes', screens]]);
+      .toEqual([['menu-de-opcoes', 'camera', screens], ['menu-de-opcoes', 'galeria', screens]]);
   });
 
   it.each([
@@ -176,7 +175,7 @@ class LibCrop {} LibCrop.cmp = i0.ɵɵngDeclareComponent({ type: LibCrop, select
         ['visualizacao', 'desculpe', ['a:a']], ['click', 'ok-desculpe', ['a:a']],
         ['visualizacao', 'sem-conexao', ['b:b']], ['click', 'ok-sem-conexao', ['b:b']],
         ['visualizacao', '[titulo-do-modal-exibido]', ['c:c']],
-        ['visualizacao', 'crop', ['c:c']], ['click', 'cancelar-modal', ['c:c']],
+        ['visualizacao', 'recortar', ['c:c']], ['click', 'cancelar-recortar', ['c:c']],
       ]));
     });
 

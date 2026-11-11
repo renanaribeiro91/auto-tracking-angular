@@ -138,6 +138,8 @@ Códigos de saída: `0` válido, `1` pendências estruturais ou marcações desa
 
 `verify` reprova apenas fontes sem o tagueamento atual. Relatório ou planilha local ausente ou divergente, como após trocar de branch, gera um aviso sem reprovar, pois as evidências não vão para o Git. `tracking` recompõe os artefatos divergentes e preserva os IDs existentes. O hook `pre-push` mantém a verificação das fontes commitadas, pois as evidências são locais e não são transportadas pelo Git.
 
+`npx auto-tracking hooks install` grava nos hooks do projeto (Husky, `core.hooksPath` do repositório ou `.git/hooks`) um bloco curto que só localiza o Node (clientes Git gráficos não herdam o PATH do terminal) e chama `auto-tracking hook <nome>`; toda a lógica, inclusive conferir a lib instalada contra o `package.json`, fica na lib. O restante do hook (lint, checagens do time) é preservado, e reexecutar o comando atualiza blocos antigos no lugar. Com `core.hooksPath` global (fora do repositório), a instalação é recusada: o bloco valeria para todos os repositórios da máquina.
+
 ## Artefatos gerados
 
 | Arquivo                                     | Finalidade                                                                        |

@@ -22,6 +22,21 @@ export interface InlineTemplate {
 }
 
 /** Componente Angular normalizado para as regras de descoberta e marcação. */
+/** Caminho de uma rota no código: padrão bruto (com parâmetros) e os níveis de negócio que ele nomeia. */
+export interface RouteChain {
+  readonly pattern: string;
+  readonly segments: readonly string[];
+  /** `data` efetivo da rota, já mesclado como o Angular faz (`{ ...herdado, ...próprio }`); `null` quando não é provável. */
+  readonly data?: Readonly<Record<string, RouteValue>> | null;
+}
+
+/** Valor que só existe em runtime (chamada, variável, spread): nunca vira texto provado. */
+export const UNPROVEN_ROUTE_VALUE: unique symbol = Symbol('valor de rota não provado');
+
+/** Valor literal do `data` da rota, resolvido pelo código. */
+export type RouteValue = string | number | boolean | null | typeof UNPROVEN_ROUTE_VALUE
+  | readonly RouteValue[] | { readonly [key: string]: RouteValue };
+
 export interface ComponentInfo {
   readonly baseClass?: string;
   readonly initializers?: ReadonlySet<string>;
@@ -101,6 +116,12 @@ export interface ProjectIndex {
   readonly displayTexts?: (componentKey: string, expression: string) => readonly string[] | null;
   /** Rotas-casca: sempre descem para um filho, logo não emitem screen_view próprio. */
   readonly shellComponents?: ReadonlySet<string>;
+  /** Componente roteado → caminhos da árvore de rotas (padrão bruto e níveis de negócio), do módulo raiz à folha. */
+  readonly routeChains?: ReadonlyMap<string, readonly RouteChain[]>;
+  /** O router liga o `data` da rota aos inputs dos componentes. */
+  readonly routeInputBinding?: boolean;
+  /** `loadChildren` relativo sem destino provado: os filhos dele ficam sem o nível do pai. */
+  readonly unresolvedRoutes?: readonly { readonly file: string; readonly line: number; readonly specifier: string; readonly empty: boolean; readonly declared?: readonly string[] }[];
   /** Rotas sem importação resolvível cujo nome aponta para mais de uma declaração. */
   readonly ambiguousRoutes: readonly { readonly file: string; readonly className: string; readonly line: number }[];
   /** identidade do componente que abre → identidades dos componentes abertos. */

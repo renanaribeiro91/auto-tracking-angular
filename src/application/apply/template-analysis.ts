@@ -232,8 +232,9 @@ export class TemplateAnalysis {
         if (!nested || nested === component || !nested.outputs.has(event) || depth >= 3) {
           // Sem produtor público rastreável, um @Output Angular arbitrário não é
           // um evento DOM. Somente gestos nativos/Ionic conhecidos são prova física.
-          const local = component.source === 'projeto';
-          const selector = local ? tag : this.stableSelector(tag, attrs, template, match.index!, sameGesture);
+          const forwarded = this.usageGesture(component, tag, attrs, template, match.index!, expression);
+          const local = component.source === 'projeto' && !forwarded;
+          const selector = forwarded ?? (local ? tag : this.stableSelector(tag, attrs, template, match.index!, sameGesture));
           if (selector && OBSERVABLE_EVENTS.has(event) && (event !== 'ngSubmit' || tag === 'form')) this.addTrigger(triggers, event, selector, local);
           continue;
         }
@@ -251,6 +252,48 @@ export class TemplateAnalysis {
     }
 
     return triggers;
+  }
+
+  /**
+   * Gesto interno de componente do projeto sem texto próprio (`?`, ícone) que só repassa um @Output: quem lhe dá sentido
+   * é o uso (`(onClick)="mostrarDadosBancarios()"`). Devolve o seletor estável para marcá-lo no uso; `null` mantém o gesto
+   * no template do filho, onde o texto dele nomeia a ação.
+   */
+  usageGesture(component: ComponentDef, tag: string, attrs: ReadonlyMap<string, string>, template: string, offset: number, expression: string): string | null {
+    if (component.source !== 'projeto' || !this.forwardsOnly(component, expression) || this.hasOwnLabel(tag, attrs, template, offset)) return null;
+    return this.stableSelector(tag, attrs, template, offset, (attributes) =>
+      [...attributes].some(([key, value]) => /^\(.+\)$/.test(key) && value === expression));
+  }
+
+  /** O handler só emite outputs do componente (direto ou por um método cujo corpo é só isso). */
+  private forwardsOnly(component: ComponentDef, expression: string): boolean {
+    const outputs = [...new Set(component.outputs.values())];
+    const emitsOnly = (code: string): boolean => {
+      let rest = code.trim().replace(/^\{|\}$/g, '');
+      for (const output of outputs) {
+        rest = rest.replace(new RegExp(`(?:this\\s*\\.\\s*)?${output.replace(/\$/g, '\\$')}\\s*\\.\\s*(?:emit|next)\\s*\\([^;]*?\\)\\s*;?`, 'g'), '');
+      }
+      return outputs.length > 0 && !rest.trim() && rest.length !== code.trim().length;
+    };
+    if (emitsOnly(expression)) return true;
+    const call = /^\s*(?:this\s*\.\s*)?([\w$]+)\s*\([^()]*\)\s*;?\s*$/.exec(expression);
+    const body = call ? component.methods.get(call[1]!) : undefined;
+    return body !== undefined && emitsOnly(body);
+  }
+
+  /** Texto, interpolação ou atributo acessível dentro do elemento: o próprio filho sabe nomear o gesto. */
+  private hasOwnLabel(tag: string, attrs: ReadonlyMap<string, string>, template: string, offset: number): boolean {
+    if (['aria-label', 'title', 'label', 'texto', 'text', 'titulo', 'rotulo'].some((name) =>
+      attrs.get(name)?.trim() || attrs.get(`[${name}]`)?.trim() || attrs.get(`[attr.${name}]`)?.trim())) return true;
+    const pattern = new RegExp(START_TAG_PATTERN.source, 'g');
+    pattern.lastIndex = offset;
+    const open = pattern.exec(template);
+    if (!open || open.index !== offset || /\/>$/.test(open[0])) return false;
+    const close = template.indexOf(`</${tag}`, offset + open[0].length);
+    const inner = template.slice(offset + open[0].length, close === -1 ? undefined : close);
+    if (/\{\{/.test(inner)) return true;
+    const text = inner.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' ').replace(/[^\p{L}\p{N}]+/gu, '');
+    return text.length >= 2;
   }
 
   private findEmittingMethods(component: ComponentDef, emitPattern: RegExp): Set<string> {

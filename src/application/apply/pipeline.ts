@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto';
 import * as path from 'path';
 import { TemplateTagger, type TagDiagnostic, type TagEntry } from './tagger.js';
 import { listItemFields, numericSelectionMethods, staticListLabels } from './selection-provenance.js';
+import { routeDataLabels } from './route-data.js';
+import { staticNestedLabels } from './static-values.js';
 import { ComponentScreenResolver } from './component-screen-resolver.js';
 import type { ComponentInfo, OverlaySite, ProjectIndex } from './ports/project-index.js';
-import { ScreenIdentityResolver } from './screen-identity-resolver.js';
+import { ScreenIdentityResolver, type ScreenIdentity } from './screen-identity-resolver.js';
 import { ENGINE_VERSION } from './constants.js';
 import { overlayGestures, overlayHeading } from './overlay-gestures.js';
 import { tagSurface, untagSurface } from './surface-tagger.js';
@@ -14,8 +16,9 @@ import { firedEvents } from './fired-events.js';
 import { SCREEN_IDENTITY_REFINEMENT_LEVELS } from './screen-identity.config.js';
 import { decodeOutputBindings } from '../../domain/contract/output-bindings.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
-import { labelSlug, overlayActionLabel, overlayComponentName, slug } from '../../domain/contract/slug.js';
-import { ORIGIN_SCREEN, isStaticScreenReference } from '../../domain/contract/screen-binding.js';
+import { UI_STRUCTURE_WORDS, joinLabel, labelSlug, overlayActionLabel, overlayComponentName, productLabel, slug } from '../../domain/contract/slug.js';
+import { encodeTrackingToken } from '../../domain/contract/tracking-token-encoder.js';
+import { ORIGIN_SCREEN, isStaticScreenReference, screenPath, type ScreenRoute } from '../../domain/contract/screen-binding.js';
 import type { StaticTrackingConfig } from './ports/tracking-project-config.js';
 import type { ResolvedPaths } from './ports/output-paths.js';
 import type { TrackingPipelineDependencies } from './ports/tracking-pipeline-dependencies.js';
@@ -34,6 +37,44 @@ export interface PipelineResult {
   readonly diagnostics: readonly TagDiagnostic[];
   readonly relatorio: string;
   readonly templates: number;
+}
+
+/**
+ * Níveis do caminho com o nome que o produto lê, iguais em qualquer projeto: versão do código (`-v2`), tecnologia
+ * (`iframe`), estrutura de UI, a palavra "tela" e letra solta saem; o nível não repete o pai como prefixo
+ * (`vacinas/vacinas-carteiras` → `vacinas:carteiras`) e nível igual ao anterior colapsa. Com `distinctLast`, o
+ * último segmento nunca colapsa: fica com o nome declarado na rota, ainda sem versão.
+ */
+/** Primeira prova que responde: a leitura literal da classe e, sem ela, a avaliação de constantes e transformações. */
+function firstProven(...sources: ((list: string, field: string) => readonly string[] | null)[]): (list: string, field: string) => readonly string[] | null {
+  return (list, field) => {
+    for (const source of sources) {
+      const values = source(list, field);
+      if (values?.length) return values;
+    }
+    return null;
+  };
+}
+
+export function productLevels(segments: readonly string[], distinctLast = false): string[] {
+  const levels: string[] = [];
+  let parentFull = '';
+  const unversioned = (segment: string) => slug(segment.replace(/[-_.]?v\d+$/i, ''), 200);
+  for (const segment of segments) {
+    const words = unversioned(segment).split('-').filter((word) => word.length > 1);
+    const full = productLabel(words.filter((word, _, all) => word !== 'tela' || all.length === 1).join('-'));
+    let name = UI_STRUCTURE_WORDS.has(full) ? '' : full;
+    // Só o prefixo repete a hierarquia; como sufixo o nome do pai é o objeto da ação (`calcular-reembolso`) e fica.
+    // O pai pode ter sido encurtado (`vacinas-carteiras` → `carteiras`): compara com os dois nomes.
+    for (const parent of [parentFull, levels[levels.length - 1]]) {
+      if (parent && name !== parent && name.startsWith(`${parent}-`)) name = name.slice(parent.length + 1);
+    }
+    if (name && name !== levels[levels.length - 1]) levels.push(name);
+    if (full) parentFull = full;
+  }
+  const last = unversioned([...segments].reverse().find((segment) => unversioned(segment)) ?? '');
+  if (distinctLast && last && levels[levels.length - 1] !== last) levels.push(last);
+  return levels;
 }
 
 export class PipelineError extends Error {}
@@ -63,6 +104,65 @@ export class TrackingPipeline {
     const fromWorkspace = path.join(consumerRoot, sourceRoot ?? 'src');
     if (this.fileSystem.exists(fromWorkspace)) return fromWorkspace;
     throw new PipelineError(`raiz de código não encontrada para ${tsconfig}`);
+  }
+
+  /**
+   * Ações distintas que chegariam iguais ao Firebase (`editar` em dois blocos do mesmo resumo) levam o nome de negócio
+   * do componente de cada uma (`editar-dados-solicitante`, `editar-dados-bebes`). Só o rótulo do contrato muda: o token
+   * é regravado no lugar, então IDs ficam estáveis e a próxima execução chega ao mesmo texto.
+   */
+  private distinguishSameLabels(entries: TagEntry[], fileOfReport: ReadonlyMap<string, string>, current: Map<string, string>): void {
+    const nameOf = (arquivo: string): string => productLabel(slug(path.basename(arquivo)
+      .replace(/\.(?:html|ts)$/, '').replace(/[.-](?:page|component|modal|container|dialog|popover)$/, ''), 60));
+    const eligible = (entry: TagEntry): boolean => entry.evento === 'click' && !!entry.ref && !!entry.rotulo
+      && !entry.rotulo.startsWith('[') && !entry.rotulos?.length;
+    const keyOf = (entry: TagEntry, screen: string): string => [screen, entry.elemento, entry.rotulo, entry.opcao_selecionada_1 ?? ''].join('\0');
+    const names = new Map<string, Set<string>>();
+    for (const entry of entries) {
+      if (!eligible(entry)) continue;
+      for (const screen of entry.telas.filter(isStaticScreenReference)) {
+        names.set(keyOf(entry, screen), new Set([...(names.get(keyOf(entry, screen)) ?? []), nameOf(entry.arquivo)]));
+      }
+    }
+    entries.forEach((entry, position) => {
+      const name = nameOf(entry.arquivo);
+      if (!eligible(entry) || !name || `-${entry.rotulo}-`.includes(`-${name}-`)
+        || !entry.telas.some((screen) => (names.get(keyOf(entry, screen))?.size ?? 0) > 1)) return;
+      const decoded = decodeTrackingToken(entry.ref!);
+      if (!decoded) return;
+      const rotulo = joinLabel(entry.rotulo, name);
+      const ref = encodeTrackingToken({ ...decoded,
+        ...(decoded.click?.id === entry.id ? { click: { ...decoded.click, rotulo } } : {}),
+        ...(decoded.outputs ? { outputs: decoded.outputs.map((output) => output.id === entry.id ? { ...output, label: rotulo } : output) } : {}),
+      });
+      const file = fileOfReport.get(entry.arquivo);
+      if (file) current.set(file, current.get(file)!.split(entry.ref!).join(ref));
+      entries.forEach((other, index) => { if (other.ref === entry.ref) entries[index] = { ...other, ref }; });
+      entries[position] = { ...entries[position]!, rotulo, ref };
+    });
+  }
+
+  /**
+   * Identidade de cada caminho de rota com o nome que o produto lê: 1º nível é a funcionalidade e os seguintes formam a
+   * tela (`calcular-reembolso:dados`). Versão do código (`-v2`), tecnologia (`iframe`), estrutura de UI e letra solta saem
+   * de cada nível; nível que repete o anterior colapsa (`beep-saude/iframe-beep-saude` → `beep-saude`).
+   */
+  private routeScreens(index: ProjectIndex): Map<string, ScreenRoute[]> {
+    const result = new Map<string, ScreenRoute[]>();
+    const screenOf = (segments: readonly string[], distinctLast = false) => {
+      const levels = productLevels(segments, distinctLast);
+      return levels.length ? { funcionalidade: levels[0]!, tela: levels.length === 1 ? levels[0]! : levels.slice(1).join(':') } : null;
+    };
+    const all = [...index.routeChains ?? []].flatMap(([key, chains]) => chains.map((chain) => ({ key, chain, screen: screenOf(chain.segments) })));
+    const pathOf = (screen: { funcionalidade: string; tela: string }) => screenPath(screen.funcionalidade, screen.tela);
+    for (const { key, chain, screen } of all) {
+      // Rota filha com outro componente é outro passo do funil: nunca vira a tela do ancestral.
+      const swallowed = screen && all.some((other) => other.key !== key && other.screen && chain.pattern.startsWith(`${other.chain.pattern}/`)
+        && pathOf(other.screen) === pathOf(screen));
+      const route = swallowed ? screenOf(chain.segments, true) : screen;
+      if (route) result.set(key, [...result.get(key) ?? [], { pattern: chain.pattern, ...route }]);
+    }
+    return result;
   }
 
   private relativePath(root: string, file: string): string {
@@ -112,9 +212,19 @@ export class TrackingPipeline {
       }
       const catalog = this.componentCatalogBuilder.buildCatalog(consumerRoot, index.components.map((c) => c.def),
         (index.overlaySites ?? []).flatMap((site) => [site, ...(site.variantes ?? [])].flatMap((item) => item.componente ?? [])));
+      // A árvore de rotas é a escadinha do produto (funcionalidade → subfuncionalidade → tela); pastas só valem sem rota provada.
+      const routeScreens = this.routeScreens(index);
+      for (const route of index.unresolvedRoutes ?? []) {
+        diagnostics.push({ code: 'ROUTE_LAZY_UNPROVEN', arquivo: this.relativePath(consumerRoot, route.file), linha: route.line,
+          mensagem: route.empty
+            ? `rota sem component carrega '${route.specifier}', que não declara rotas: o Angular não renderiza tela nenhuma nesse caminho e nenhum evento sai dele${
+              route.declared?.length === 1 ? `; o módulo declara ${route.declared[0]} — se é a tela pretendida, informe component: ${route.declared[0]} na rota` : ''}`
+            : `loadChildren '${route.specifier}' não foi resolvido para um arquivo do projeto (caminho inexistente ou alias de tsconfig); as telas filhas ficam sem o nível desta rota` });
+      }
       // identidade de analytics única por tela: refina só as telas que colidiriam com outra
       const refineOf = new Map<ComponentInfo, 1 | 2 | 3>();
-      const routedComponents = index.components.filter((component) => index.routedComponents.has(component.key));
+      const routedComponents = index.components.filter((component) => index.routedComponents.has(component.key) && !routeScreens.has(component.key));
+
       const identityFor = (component: ComponentInfo, refine: 0 | 1 | 2 | 3 = 0) =>
         this.screenIdentityResolver.resolve(scanRoot, component.templateFile ?? component.tsFile, refine, refine === 3 ? component.className : '', index.routedComponents.has(component.key));
       for (const level of SCREEN_IDENTITY_REFINEMENT_LEVELS) {
@@ -138,9 +248,14 @@ export class TrackingPipeline {
       }
       // Versão do código (`login-v2`) não é domínio: sai do nome, salvo quando as duas gerações convivem no projeto.
       const unversioned = (name: string): string => name.replace(/-v\d+$/, '');
-      const routedModules = new Set([...finalScreenIds.keys()].map((key) => key.split(':')[0]!));
+      const routedModules = new Set([...finalScreenIds.keys(), ...[...routeScreens.values()].flat().map((route) => route.funcionalidade)]
+        .map((key) => key.split(':')[0]!));
       const identity = (component: ComponentInfo) => {
-        const found = identityFor(component, refineOf.get(component) ?? 0);
+        const route = routeScreens.get(component.key)?.[0];
+        if (route) return { funcionalidade: route.funcionalidade, tela: route.tela };
+        const raw = identityFor(component, refineOf.get(component) ?? 0);
+        const [funcionalidadeLimpa = raw.funcionalidade, telaLimpa] = productLevels([raw.funcionalidade, raw.tela]);
+        const found = { funcionalidade: funcionalidadeLimpa, tela: raw.tela === raw.funcionalidade ? funcionalidadeLimpa : telaLimpa ?? funcionalidadeLimpa };
         const baseModule = unversioned(found.funcionalidade);
         const baseScreen = unversioned(found.tela);
         return {
@@ -148,7 +263,23 @@ export class TrackingPipeline {
           tela: finalScreenIds.has(`${found.funcionalidade}:${baseScreen}`) ? found.tela : baseScreen,
         };
       };
-      const screensOf = this.componentScreenResolver.resolve(index, identity, usage.methods);
+      const screensOfRoute = (component: ComponentInfo): string[] =>
+        [...new Set((routeScreens.get(component.key) ?? []).map((route) => `${route.funcionalidade}:${route.tela}`))];
+      /**
+       * Casca (layout que só embrulha o outlet) nunca é a tela mais profunda: a pessoa está numa filha. O que ela e o que
+       * ela embute disparam saem na tela filha ativa; sem filha provada (ex.: MFE remoto), na tela de origem.
+       */
+      const shellScreens = (component: ComponentInfo): ScreenIdentity[] => {
+        const patterns = (index.routeChains?.get(component.key) ?? []).map((chain) => chain.pattern);
+        return [...routeScreens].filter(([key]) => !index.shellComponents?.has(key)).flatMap(([, routes]) => routes)
+          .filter((route) => patterns.some((pattern) => route.pattern.startsWith(`${pattern}/`)))
+          .map(({ funcionalidade, tela }) => ({ funcionalidade, tela }));
+      };
+      const screensOf = this.componentScreenResolver.resolve(index, (component) => {
+        if (index.shellComponents?.has(component.key)) return shellScreens(component);
+        const screens = routeScreens.get(component.key);
+        return screens ? screens.map(({ funcionalidade, tela }) => ({ funcionalidade, tela })) : identity(component);
+      }, usage.methods);
       if (index.providerCalls === 0) {
         diagnostics.push({ code: 'BOOTSTRAP_PROVIDER_MISSING', arquivo: this.relativePath(consumerRoot, scanRoot), linha: 1, mensagem: 'nenhum provideAutoTracking(<config>.runtime) no bootstrap: marcações não emitem em runtime' });
       }
@@ -197,6 +328,24 @@ export class TrackingPipeline {
         }
       }
 
+      /** Rótulos vindos do `data` de cada rota, por tela; só para página que é renderizada apenas pelas rotas. */
+      const routeLabelsOf = (component: ComponentInfo) => {
+        const routes = routeScreens.get(component.key) ?? [];
+        const onlyRouted = !index.overlayComponents?.has(component.key) && screensOf(component).every((screen) => screensOfRoute(component).includes(screen));
+        const byPattern = routeDataLabels(component, index.routeChains?.get(component.key) ?? [], !!index.routeInputBinding, onlyRouted);
+        return (member: string, field?: string): ReadonlyMap<string, readonly string[]> | null => {
+          const patterns = byPattern(member, field);
+          // Rota que renderiza a página sem tela própria deixaria a união do token incompleta: fica dinâmico.
+          if (!patterns || [...patterns.keys()].some((pattern) => !routes.some((route) => route.pattern === pattern))) return null;
+          const screens = new Map<string, string[]>();
+          for (const route of routes) {
+            const screen = `${route.funcionalidade}:${route.tela}`;
+            screens.set(screen, [...new Set([...(screens.get(screen) ?? []), ...(patterns.get(route.pattern) ?? [])])]);
+          }
+          return screens.size ? screens : null;
+        };
+      };
+      const fileOfReport = new Map<string, string>();
       for (const t of targets) {
         const text = current.get(t.file)!;
         // no literal inline, só a aspa delimitadora vem escapada: desescapa para o parser e reescapa ao gravar
@@ -208,11 +357,14 @@ export class TrackingPipeline {
           owner: config.owner,
           relFile: this.relativePath(consumerRoot, t.file),
           ...identity(t.c),
-          isScreen: index.routedComponents.has(t.c.key),
+          isScreen: index.routedComponents.has(t.c.key) && !index.shellComponents?.has(t.c.key),
+          self: t.c.def,
+          ...(screensOfRoute(t.c).length > 1 ? { routes: routeScreens.get(t.c.key)! } : {}),
           catalog,
           selectionMethods: numericSelectionMethods(t.c, index.components),
-          listLabels: staticListLabels(t.c),
+          listLabels: firstProven(staticListLabels(t.c), staticNestedLabels(t.c)),
           displayTexts: (expression) => index.displayTexts?.(t.c.key, expression) ?? null,
+          routeLabels: routeLabelsOf(t.c),
           listItemFields: listItemFields(t.c),
           usedIds,
           claimedIds,
@@ -226,15 +378,17 @@ export class TrackingPipeline {
         const resolved = screensOf(t.c);
         const telas = resolved.length ? resolved : [t.c.def.selectors.includes(config.root) ? '*' : ORIGIN_SCREEN];
         entries.push(...result.entries.filter((e) => e.evento !== 'screen_view' || !index.shellComponents?.has(t.c.key)).map((e) => ({ ...e,
-          telas: e.evento === 'screen_view' ? [`${e.funcionalidade}:${e.tela}`] : telas,
+          telas: e.evento !== 'screen_view' ? telas : screensOfRoute(t.c).length ? screensOfRoute(t.c) : [`${e.funcionalidade}:${e.tela}`],
           vinculo_tela: e.evento === 'screen_view' || index.routedComponents.has(t.c.key) ? 'rota' as const : 'origem' as const,
         })));
         diagnostics.push(...result.diagnostics);
+        fileOfReport.set(this.relativePath(consumerRoot, t.file), t.file);
         if (result.html !== html) {
           const body = t.inline ? result.html.split(quote!).join('\\' + quote) : result.html;
           current.set(t.file, t.inline ? text.slice(0, t.inline.start) + body + text.slice(t.inline.end) : body);
         }
       }
+      if (config.mode === 'ref') this.distinguishSameLabels(entries, fileOfReport, current);
       for (const site of index.overlaySites ?? []) {
         if (!usage.components.has(site.componentKey)) continue;
         const component = index.components.find((item) => item.key === site.componentKey)!;
@@ -272,7 +426,8 @@ export class TrackingPipeline {
           const placeholder = `[titulo-do-${site.elemento}-exibido]`;
           addRow('visualizacao', heading ? labelSlug(heading) : (heading === undefined && overlayComponentName(presented?.selectors[0] ?? '')) || placeholder, telas);
           // O que só existe em runtime aparece como marcador, nunca some.
-          const context = heading ? labelSlug(heading) : heading === undefined ? site.elemento : placeholder;
+          // Sem título, o nome do componente apresentado; o tipo já vai em `elemento` e no rótulo seria termo técnico.
+          const context = heading ? labelSlug(heading) : heading === undefined ? overlayComponentName(presented?.selectors[0] ?? '') : placeholder;
           for (const text of overlayGestures(declaration, presented)) {
             const action = text === null ? '' : labelSlug(text);
             addRow('click', action && !context.startsWith('[') ? overlayActionLabel(action, context)

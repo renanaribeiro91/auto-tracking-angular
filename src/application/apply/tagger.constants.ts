@@ -5,8 +5,11 @@ export const BACKWARD_ACTION = /\b(voltar|anterior|retornar|back|previous)/;
 /** Palavras de código (prefixos de teste, verbos de evento) que não descrevem a ação no rótulo. */
 export const TECHNICAL_LABEL_WORDS: ReadonlySet<string> = new Set([
   'btn', 'button', 'icon', 'ico', 'img', 'lnk', 'lbl', 'txt', 'chk', 'inp', 'testid', 'test', 'e2e',
-  'on', 'ao', 'handle', 'handler', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
+  'on', 'ao', 'handle', 'handler', 'action', 'click', 'clicked', 'cliked', 'clique', 'clicar', 'evt', 'event', 'emit', 'fn', 'cb',
 ]);
+
+/** Mesmo vocabulário do runtime: a planilha e o envio limpam igual. */
+export { UI_STRUCTURE_WORDS, ENGLISH_ACTIONS as ACTION_VERBS } from '../../domain/contract/slug.js';
 
 /**
  * Expressão de rótulo dinâmico com indício de dado pessoal ou variável de negócio:
@@ -56,13 +59,10 @@ export const COMPOUND_LABEL_INPUT = /^(?!header|cabecalho|sub|ok|cancel|confirm|
 /** Os mesmos atributos na forma ligada (`[attr.x]`/`[x]`). */
 export const BOUND_LABEL_ATTRIBUTES: readonly string[] = LABEL_ATTRIBUTES.flatMap((name) => [`[attr.${name}]`, `[${name}]`]);
 
-/** Verbo de método em inglês na forma que o negócio lê no rótulo. */
-export const ACTION_VERBS: ReadonlyMap<string, string> = new Map([
-  ['open', 'abrir'], ['close', 'fechar'], ['change', 'alterar'], ['select', 'selecionar'], ['toggle', 'alternar'], ['show', 'mostrar'], ['hide', 'ocultar'],
-  ['add', 'adicionar'], ['remove', 'remover'], ['delete', 'excluir'], ['edit', 'editar'], ['save', 'salvar'], ['send', 'enviar'], ['submit', 'enviar'], ['search', 'buscar'],
-]);
-
 /** Nome que só repete o tipo do controle (`clickLink` → `link`) não descreve a ação. */
+/** Verbos que só dizem algo com o objeto: sozinhos (`mostraModal` sem o `modal`) não nomeiam a ação. */
+export const OBJECT_VERBS: ReadonlySet<string> = new Set(['abrir', 'abre', 'mostrar', 'mostra', 'exibir', 'exibe', 'ver', 'visualizar', 'apresentar']);
+
 export const GENERIC_ELEMENT_LABEL = /^(?:link|botao|button|item|card|elemento|opcao|option|acao|action)$/;
 
 /** Controles cujo conteúdo são as opções (o valor escolhido), nunca o nome do controle. */

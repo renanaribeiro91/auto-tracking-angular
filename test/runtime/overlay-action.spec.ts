@@ -23,7 +23,7 @@ describe('overlay criado por código sem marcação', () => {
       document.querySelector('.alert-button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await flush();
       expect(fed.map((event) => [event.params['tela'], event.params['elemento'], event.params['rotulo']])).toEqual([
-        ['app-x:saude:reembolso:anexo', 'menu-de-opcoes', 'camera-menu-de-opcoes'], ['app-x:saude:reembolso:anexo', 'alerta', 'ok-entendi-atencao']]);
+        ['app-x:saude:reembolso:anexo', 'menu-de-opcoes', 'camera'], ['app-x:saude:reembolso:anexo', 'alerta', 'ok-entendi-atencao']]);
       expect(host).toEqual([]);
     } finally { stops.forEach((stop) => stop()); }
   });
@@ -44,7 +44,7 @@ describe('overlay criado por código sem marcação', () => {
     } finally { stop(); }
   });
 
-  it('contexto vem do aria-labelledby e, sem título público, do tipo do modal', async () => {
+  it('contexto vem do aria-labelledby; sem título público nem nome de componente, só a ação (o tipo vai em elemento)', async () => {
     document.body.innerHTML = `<span id="t">Indisponível</span><ion-modal aria-labelledby="t"><button>Entendi</button></ion-modal>
       <ion-modal><button>Fechar</button></ion-modal><ion-modal><h3>Contato 11 99999-9999</h3><button>Ligar</button></ion-modal>`;
     const sent: TrackingEvent[] = [];
@@ -52,7 +52,7 @@ describe('overlay criado por código sem marcação', () => {
     try {
       document.querySelectorAll('button').forEach((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
       await flush();
-      expect(sent.map((event) => event.params['rotulo'])).toEqual(['entendi-indisponivel', 'fechar-modal', 'ligar-modal']);
+      expect(sent.map((event) => event.params['rotulo'])).toEqual(['entendi-indisponivel', 'fechar', 'ligar']);
     } finally { stop(); }
   });
 

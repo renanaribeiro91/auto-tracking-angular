@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AngularComponentCatalogBuilder } from './component-catalog.js';
 import { readSurfaceDeclaration, surfaceFactoryNames } from './surface-declaration.js';
+import { RouteTreeBuilder } from './route-tree.js';
 import { START_TAG, TemplateAnalysis } from '../../application/apply/template-analysis.js';
 import type { ComponentDef } from '../../application/apply/ports/component-catalog.js';
 import type { OverlayDeclaration, OverlayVariant, ComponentInfo, InlineTemplate, OverlaySite, ProjectIndex, ServiceInfo, SurfaceDeclaration } from '../../application/apply/ports/project-index.js';
@@ -363,6 +364,17 @@ export class AngularProjectIndexer {
   }
 
   /** Textos que o código comprova para uma expressão do template; `null` se algum caminho só existe em runtime. */
+  /** Versão maior instalada de um pacote, resolvida como o Node (subindo pelos `node_modules`); `null` sem prova. */
+  private installedMajor(from: string, name: string): number | null {
+    for (let current = path.resolve(from); ; current = path.dirname(current)) {
+      const manifest = path.join(current, 'node_modules', name, 'package.json');
+      if (fs.existsSync(manifest)) {
+        try { return Number(/^(\d+)\./.exec((JSON.parse(fs.readFileSync(manifest, 'utf8')) as { version?: string }).version ?? '')?.[1]) || null; } catch { return null; }
+      }
+      if (path.dirname(current) === current) return null;
+    }
+  }
+
   private templateTexts(owner: ts.ClassDeclaration, expression: string): readonly string[] | null {
     const texts = this.expressionTexts(owner, expression, new Set());
     return texts ? [...new Set(texts)] : null;
@@ -1205,7 +1217,24 @@ export class AngularProjectIndexer {
       const owner = declaration(key);
       return owner ? this.templateTexts(owner, expression) : null;
     };
-    return { components, routedComponents, shellComponents, displayTexts, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
+    const routeTree = new RouteTreeBuilder().build({
+      sourceFiles,
+      routerMajor: this.installedMajor(scanRoot, '@angular/router'),
+      resolveModuleFile: (fromFile, specifier) => this.resolveModuleFile(fromFile, specifier, sourceFiles),
+      componentsOf: (file, route) => route.properties.filter(ts.isPropertyAssignment).flatMap((property) => {
+        const name = property.name.getText();
+        const references = name === 'component' && ts.isIdentifier(property.initializer)
+          ? [{ className: property.initializer.text }]
+          : name === 'loadComponent' ? this.propertyNames(property.initializer).map((className) => ({ className,
+            ...(this.dynamicImportSpecifier(property.initializer) ? { moduleSpecifier: this.dynamicImportSpecifier(property.initializer)! } : {}) }))
+            : [];
+        return references.flatMap((reference) => {
+          const target = this.resolveClass({ file, ...reference }, 'component', sourceFiles, recordsByName, recordsByFile);
+          return target && routedComponents.has(target.key) ? [target.key] : [];
+        });
+      }),
+    });
+    return { components, routedComponents, shellComponents, routeChains: routeTree.chains, routeInputBinding: routeTree.inputBinding, unresolvedRoutes: routeTree.unresolved, displayTexts, ambiguousRoutes, opens, services, actionImports, providerCalls, surfaces, surfaceErrors, trackingFiles, overlayComponents, overlaySites,
       dynamicMethodValues, eagerServices };
   }
 

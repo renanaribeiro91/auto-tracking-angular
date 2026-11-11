@@ -13,7 +13,7 @@ import {
   type Type,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
-import { NavigationEnd, Router } from '@angular/router';
+import { NavigationEnd, Router, type ActivatedRouteSnapshot } from '@angular/router';
 import type { TrackingOptions, TrackingEvent } from '../config.js';
 import { validateEvent } from '../domain/contract/schema.js';
 import { AppIdentityResolver } from '../adapters/runtime/identity-resolver.js';
@@ -32,6 +32,16 @@ function routedSelector(router: Router): string | null {
     snapshot = snapshot.firstChild;
   }
   return selector;
+}
+
+/** Caminho de rota ativo pelos padrões do código (`reembolso/opcao-reembolso`), incluindo o prefixo do host. */
+function routedPattern(router: Router): string | null {
+  const paths: string[] = [];
+  for (let snapshot: ActivatedRouteSnapshot | null | undefined = router.routerState?.snapshot.root; snapshot; snapshot = snapshot.firstChild) {
+    const path = snapshot.routeConfig?.path;
+    if (path) paths.push(path);
+  }
+  return paths.length ? paths.join('/') : null;
 }
 
 export class TrackingDispatcher {
@@ -228,20 +238,20 @@ class AutoTrackingLifecycle {
     this.lastUrl = event.urlAfterRedirects;
     try {
       const selector = routedSelector(router);
-      if (selector) this.scheduleScreenView(tracker, selector);
+      if (selector) this.scheduleScreenView(tracker, selector, routedPattern(router));
     } catch (error) {
       console.warn(`[auto-tracking] navegação não instrumentada: ${String(error)}`);
     }
   }
 
-  private scheduleScreenView(tracker: DomEventTracker, selector: string): void {
+  private scheduleScreenView(tracker: DomEventTracker, selector: string, activePattern: string | null): void {
     // Cancelar tarefas após o teardown evita acessar o DOM de uma rota/MFE destruído.
     const schedule = (delay: number, retry: boolean): void => {
       const timer = setTimeout(() => {
         this.pendingTimers.delete(timer);
         if (this.disposed) return;
         try {
-          if (!tracker.emitScreenView(selector) && retry) schedule(300, false);
+          if (!tracker.emitScreenView(selector, activePattern) && retry) schedule(300, false);
         } catch (error) {
           console.warn(`[auto-tracking] screen_view ignorado com segurança: ${String(error)}`);
         }
@@ -285,7 +295,7 @@ export function provideAutoTracking(options: TrackingOptions): EnvironmentProvid
       const router = inject(Router, { optional: true });
       return new AutoTrackingSurfaces(options.owner, () => {
         const selector = router ? routedSelector(router) : null;
-        return selector ? DomEventTracker.screenForHost(document, selector, options.mode ?? 'classic', options.owner) : null;
+        return selector ? DomEventTracker.screenForHost(document, selector, options.mode ?? 'classic', options.owner, routedPattern(router!)) : null;
       });
     } },
     { provide: TRACKING_DISPATCHER, useFactory: () => new TrackingDispatcher(options, inject(Injector)) },

@@ -10,73 +10,25 @@ export const GIT_HOOK_NAMES: readonly GitHookName[] = ['pre-commit', 'pre-push']
 
 const BLOCK_START = '# >>> auto-tracking';
 const BLOCK_END = '# <<< auto-tracking';
+/** Script da lib que o bloco chama: o shell o executa mesmo sem Node no PATH. */
+const HOOK_SCRIPT = 'node_modules/auto-tracking-angular/hooks/hook.sh';
 const TRACKING_INPUT_PATTERN = /\.(?:html|ts)$|(?:^|\/)(?:angular\.json|package\.json|tsconfig[^/]*\.json)$/;
 
-const HOOK_DESCRIPTION: Readonly<Record<GitHookName, string>> = {
-  'pre-commit': 'Atualiza o tagueamento e inclui no próprio commit o que mudou.',
-  'pre-push': 'Só verifica: bloqueia o push se o tagueamento estiver pendente ou fora do commit.',
-};
 /** SHA nulo do protocolo do pre-push: ref removida, nada a verificar. */
 const DELETED_REF = /^0+$/;
 
 /**
- * Conferência de versão embutida no próprio hook (não depende da lib instalada, que pode ser a antiga):
- * a lib em node_modules tem de satisfazer o package.json (lockfile não é versionado em todo app).
- * Sem aspas simples: vai dentro de `node -e '...'`.
- */
-const VERSION_CHECK_SCRIPT = [
-  'const fs=require("fs"),p=require("path"),r=process.argv[1],nome="auto-tracking-angular";',
-  'const ler=(f)=>{try{return JSON.parse(fs.readFileSync(p.join(r,f),"utf8"))}catch{return null}};',
-  'const inst=(ler("node_modules/"+nome+"/package.json")||{}).version||"";',
-  'const pkg=ler("package.json")||{},faixa=String((pkg.dependencies||{})[nome]||(pkg.devDependencies||{})[nome]||"").trim();',
-  'const n=(v)=>(/^(\\d+)\\.(\\d+)\\.(\\d+)/.exec(v)||[]).slice(1).map(Number),cmp=(a,b)=>a[0]-b[0]||a[1]-b[1]||a[2]-b[2];',
-  // shortcut: aceita só x.y.z, ^x.y.z, ~x.y.z e >=x.y.z; outra forma bloqueia (amplie se um app precisar).
-  'const m=/^(\\^|~|>=)?v?(\\d+\\.\\d+\\.\\d+(?:-[\\w.]+)?)$/.exec(faixa),i=n(inst);let ok=!!(inst&&m);',
-  'if(ok){const b=n(m[2]),op=m[1]||"";ok=op===">="?cmp(i,b)>=0:!op?inst===m[2]:cmp(i,b)>=0&&i[0]===b[0]&&(op==="~"||b[0]===0?i[1]===b[1]:true);',
-  'if(inst.includes("-")&&inst!==m[2])ok=false;}',
-  'if(!ok){console.error("[auto-tracking] lib instalada ("+(inst||"nenhuma")+") difere da declarada ("+(faixa||"nenhuma")+"): execute npm install antes de continuar.");process.exit(1)}',
-].join('');
-
-/**
- * Bloco shell do hook, organizado em funções nomeadas para quem abrir o
- * arquivo entender o que roda. `project` é o caminho do app relativo à raiz
- * git ('' quando coincidem), para monorepos. POSIX sh: roda no Git Bash do
- * Windows, macOS e Linux.
+ * Bloco do hook no app: só chama `hooks/hook.sh` da lib instalada, que acha o Node e roda `auto-tracking hook`; toda a
+ * lógica (inclusive conferir a versão instalada contra o package.json) fica na lib. Lib anterior ao `hook.sh` é mais velha
+ * que o bloco: pede `npm install`. `project` é o caminho do app relativo à raiz git ('' quando coincidem), para monorepos.
  */
 export function hookBlock(hook: GitHookName, project = ''): string {
   const projectPath = project ? `/${project.split(path.sep).join('/')}` : '';
   return [
     `${BLOCK_START} (gerado por \`auto-tracking hooks install\`; não editar dentro do bloco)`,
-    '# Tagueamento automático do auto-tracking-angular.',
-    `# ${hook}: ${HOOK_DESCRIPTION[hook]}`,
-    '# Ver o que está instalado: npx auto-tracking hooks status',
-    '',
-    '# Clientes Git gráficos iniciam sem o PATH do terminal: procura o Node nos gerenciadores comuns.',
-    'auto_tracking_localizar_node() {',
-    '  command -v node >/dev/null 2>&1 && return 0',
-    '  PATH="$HOME/.volta/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
-    '  command -v node >/dev/null 2>&1 && return 0',
-    '  if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then',
-    '    . "${NVM_DIR:-$HOME/.nvm}/nvm.sh" >/dev/null 2>&1',
-    '    nvm use --silent >/dev/null 2>&1 || nvm use default --silent >/dev/null 2>&1',
-    '  fi',
-    '  command -v node >/dev/null 2>&1 || { echo "[auto-tracking] Node.js não encontrado no PATH do Git." >&2; return 1; }',
-    '}',
-    '',
-    '# Executa o hook da biblioteca instalada no projeto; toda a lógica fica na lib.',
-    'auto_tracking_executar() {',
-    `  auto_tracking_projeto="$(git rev-parse --show-toplevel)${projectPath}"`,
-    '  auto_tracking_cli="$auto_tracking_projeto/node_modules/auto-tracking-angular/dist/cli/index.js"',
-    '  if [ ! -f "$auto_tracking_cli" ]; then',
-    '    echo "[auto-tracking] biblioteca não instalada: execute npm install." >&2',
-    '    return 1',
-    '  fi',
-    '  # Tagueamento gerado por versão diferente da declarada no commit não é garantido: bloqueia.',
-    `  node -e '${VERSION_CHECK_SCRIPT}' "$auto_tracking_projeto" || return 1`,
-    '  node "$auto_tracking_cli" hook "$1" --root "$auto_tracking_projeto"',
-    '}',
-    '',
-    `auto_tracking_localizar_node && auto_tracking_executar ${hook} || exit 1`,
+    `auto_tracking_projeto="$(git rev-parse --show-toplevel)${projectPath}"`,
+    `[ -f "$auto_tracking_projeto/${HOOK_SCRIPT}" ] || { echo "[auto-tracking] biblioteca ausente ou desatualizada: execute npm install." >&2; exit 1; }`,
+    `sh "$auto_tracking_projeto/${HOOK_SCRIPT}" ${hook} "$auto_tracking_projeto" || exit 1`,
     BLOCK_END,
   ].join('\n');
 }
@@ -233,6 +185,11 @@ export class GitRepository {
     const project = path.relative(this.root, projectRoot);
     if (project.startsWith('..') || path.isAbsolute(project)) throw new Error(`projeto fora do repositório git: ${projectRoot}`);
     const directory = this.hooksDir();
+    // core.hooksPath global vale para todos os repositórios da máquina: o bloco bloquearia commits onde a lib não existe.
+    if (!this.ownsHooksDir(directory)) {
+      throw new Error(`o git usa hooks fora deste repositório (${directory}, core.hooksPath global): instalar ali afetaria todos os repositórios. `
+        + 'Configure os hooks no projeto (ex.: npx husky install ou git config core.hooksPath .githooks) e repita.');
+    }
     fs.mkdirSync(directory, { recursive: true });
     return GIT_HOOK_NAMES.map((hook) => {
       const file = path.join(directory, hook);
@@ -242,6 +199,16 @@ export class GitRepository {
       fs.chmodSync(file, 0o755); // sem efeito no Windows; o Git Bash não exige o bit.
       return path.relative(this.root, file);
     }).concat(this.ensureLfAttributes(directory));
+  }
+
+  /** Diretório de hooks dentro do repositório (`.husky`, `.githooks`) ou do seu diretório git (`.git/hooks`, worktrees). */
+  private ownsHooksDir(directory: string): boolean {
+    const real = (target: string) => { try { return fs.realpathSync(target); } catch { return path.resolve(target); } };
+    const gitDir = path.resolve(this.root, this.git(['rev-parse', '--git-common-dir']).trim());
+    return [this.root, gitDir].some((base) => {
+      const relative = path.relative(real(base), real(directory));
+      return !relative.startsWith('..') && !path.isAbsolute(relative);
+    });
   }
 
   /** Estado de cada hook: bloco atual, bloco de outra versão ou não instalado. */

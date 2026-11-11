@@ -21,6 +21,7 @@
   },
   "files": [
     "dist",
+    "hooks",
     "README.md",
     "CHANGELOG.md"
   ],

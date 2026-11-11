@@ -58,7 +58,7 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
     document.body.innerHTML = fs.readFileSync(path.join(root, 'src/features/catalogo/page.html'), 'utf8');
     const action = document.getElementById('action')!;
     const select = document.getElementById('selection') as HTMLSelectElement;
-    const surfaces = new AutoTrackingSurfaces('app', () => ({funcionalidade:'catalogo',tela:'page'}));
+    const surfaces = new AutoTrackingSurfaces('app', () => ({funcionalidade:'catalogo',tela:'catalogo'}));
     stop = installDomTracker(document, {owner:'app',mode:'ref',product:'produto',schema:examplePreset.schema,surfaces,
       resolveEnvironment:async ()=>'app-x',send:(event)=>{sent.push(event);},warn:(message)=>{warnings.push(message);}});
     const choose = (items: readonly {id: string; label: string}[], id: string, label: string) => {
@@ -88,7 +88,7 @@ it('prova fonte → JSON/XLSX → gesto → valores exatos com dados trocados, s
       ['confirmar-escolha',undefined],['escolher-unidade','unidade-sul'],['alterar-unidade','unidade-leste'],
       ['continuar',undefined],['abrir-opcoes',undefined],['reservar','espaco-norte'],['trocar-reserva','espaco-sul'],['espaco-leste','espaco-leste'],['espaco-oeste','espaco-oeste'],
     ]);
-    expect(clicks.every((event)=>event.params['tela']==='app-x:produto:catalogo:page' && event.params['funcionalidade']==='catalogo')).toBe(true);
+    expect(clicks.every((event)=>event.params['tela']==='app-x:produto:catalogo' && event.params['funcionalidade']==='catalogo')).toBe(true);
     expect(warnings).toEqual([]);
     // Sem correspondência pública, nem ID nem objeto nem placeholder pode chegar ao dispatch.
     select.dispatchEvent(new CustomEvent('change',{bubbles:true,detail:{value:'opaque-missing'}}));

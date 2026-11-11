@@ -7,7 +7,7 @@ type MethodScreens = ReadonlyMap<string, ReadonlySet<string>>;
 
 /** Descobre as telas dos componentes compartilhados usando relações estáticas do projeto. */
 export class ComponentScreenResolver {
-  resolve(project: ProjectIndex, identity: (component: ComponentInfo) => ScreenIdentity,
+  resolve(project: ProjectIndex, identity: (component: ComponentInfo) => ScreenIdentity | readonly ScreenIdentity[],
     usedMethods?: ReadonlyMap<string, ReadonlySet<string>>): (component: ComponentInfo) => string[] {
     if (usedMethods) {
       const methodsOf = (key: string, methods: ReadonlyMap<string, string>) =>
@@ -133,15 +133,16 @@ export class ComponentScreenResolver {
   private screenLookup(
     project: ProjectIndex,
     parents: ParentGraph,
-    identity: (component: ComponentInfo) => ScreenIdentity,
+    identity: (component: ComponentInfo) => ScreenIdentity | readonly ScreenIdentity[],
   ): (component: ComponentInfo) => string[] {
     const screens = new Map<string, Set<string>>(project.components.map((component) => [component.key, new Set<string>()]));
     const byKey = new Map(project.components.map((component) => [component.key, component]));
     for (const key of project.routedComponents) {
       const component = byKey.get(key);
       if (!component) continue;
+      // Página roteada em mais de um caminho é tela em cada um deles.
       const own = identity(component);
-      screens.get(key)!.add(`${own.funcionalidade}:${own.tela}`);
+      for (const screen of Array.isArray(own) ? own : [own]) screens.get(key)!.add(`${screen.funcionalidade}:${screen.tela}`);
     }
 
     // Propagação monotônica até ponto fixo: ciclos não memoizam resultados parciais.

@@ -27,7 +27,8 @@ export interface EvidenceRow {
   readonly opcaoSelecionada: string;
   readonly origem: string;
   readonly arquivo: string;
-  readonly linha: number;
+  /** Uma ou mais linhas (`12; 30`) quando o mesmo evento sai de vários pontos do código. */
+  readonly linha: number | string;
 }
 
 export type ModuleRow = EvidenceRow & { readonly ambiente: string; readonly produto: string };

@@ -20,3 +20,6 @@ export const SELECT_OVERLAY_SELECTOR = '.select-alert, .select-action-sheet, .se
 export const NATIVE_DIALOG_SELECTOR = 'dialog[open], mat-dialog-container, mat-bottom-sheet-container, [role="dialog"][aria-modal="true"], [role="alertdialog"]';
 /** Overlays do Ionic: a visualização vem do evento de apresentação, nunca da inserção no DOM. */
 export const IONIC_OVERLAY_SELECTOR = 'ion-modal, ion-popover, ion-alert, ion-action-sheet, ion-loading, ion-toast, ion-picker';
+
+/** Host de overlay de web component (`ion-modal`, `x-popover`, `ds-bottom-sheet`): o ciclo de vida é derivado do nome. */
+export const OVERLAY_HOST_TAG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:modal|popover|action-sheet|alert|bottom-sheet|sheet|dialog|drawer)$/;

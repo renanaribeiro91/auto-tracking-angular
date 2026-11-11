@@ -1,4 +1,5 @@
 import type { OutputBinding } from './output-bindings.js';
+import type { ScreenRoute } from './screen-binding.js';
 
 /** Contrato browser-safe: uma referência representa todos os eventos de um nó. */
 export interface TrackingElement {
@@ -32,4 +33,6 @@ export interface TrackingElement {
   readonly view?: { readonly id: string; readonly elemento: string; readonly rotulo: string };
   /** O gesto só pode sair com a tela capturada no owner ou provada pela rota ancestral. */
   readonly requireOrigin?: boolean;
+  /** Página roteada em mais de um caminho: a tela vem da rota ativa, nunca de `funcionalidade`/`tela`. */
+  readonly routes?: readonly ScreenRoute[];
 }

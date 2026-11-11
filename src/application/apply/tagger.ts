@@ -1,9 +1,10 @@
 // T16 + T20 + T21 — marcação data-at-* de toda interação declarada no template; idempotente e preservando ajustes manuais
 import { START_TAG, TemplateAnalysis } from './template-analysis.js';
-import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
-import type { ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
-import { labelSlug, MAX_PROVEN_LABEL, slug } from '../../domain/contract/slug.js';
+import { BACKWARD_ACTION, CHANGE_CONTROL_TAGS, DOM_GESTURES, FORWARD_ACTION, TECHNICAL_EVENT, COMPONENT_NAVIGATION_OUTPUT, OBJECT_VERBS, PERSONAL_DATA_EXPRESSION, TECHNICAL_LABEL_WORDS, UI_STRUCTURE_WORDS, ACTION_VERBS, isInputField, looksLikeIdentifier, BOUND_LABEL_ATTRIBUTES, GENERIC_ELEMENT_LABEL, LABEL_ATTRIBUTES, OPTION_CONTAINER_TAGS, COMPOUND_LABEL_INPUT, INLINE_OVERLAY_KIND, OVERLAY_NAME_NOISE } from './tagger.constants.js';
+import type { ComponentDef, ComponentCatalog, OutputTrigger } from './ports/component-catalog.js';
+import { joinLabel, labelSlug, MAX_PROVEN_LABEL, productLabel, slug } from '../../domain/contract/slug.js';
 import { decodeOutputBindings, type OutputBinding } from '../../domain/contract/output-bindings.js';
+import { encodeScreenRoutes, type ScreenRoute } from '../../domain/contract/screen-binding.js';
 import { decodeTrackingToken } from '../../domain/contract/tracking-token.js';
 import { encodeTrackingToken } from '../../domain/contract/tracking-token-encoder.js';
 import type { TrackingElement } from '../../domain/contract/tracking-element.js';
@@ -30,6 +31,8 @@ export interface TagEntry {
   readonly opcao_selecionada_1?: string;
   /** Rótulos possíveis provados por lista estática do componente; o enviado é o do item clicado. */
   readonly rotulos?: readonly string[];
+  /** Alternativas por tela (`funcionalidade:tela`) quando o texto vem do `data` de cada rota. */
+  readonly rotulosPorTela?: Readonly<Record<string, readonly string[]>>;
   /** binding de origem no template, por exemplo `(click)` ou `(back) em <ui-header>` */
   readonly origem: string;
   readonly arquivo: string;
@@ -59,6 +62,8 @@ export interface TagContext {
   readonly listLabels?: (list: string, property: string) => readonly string[] | null;
   /** Textos que o código comprova para uma expressão do template deste componente. */
   readonly displayTexts?: (expression: string) => readonly string[] | null;
+  /** Textos do membro (ou do campo de cada item) vindos do `data` de cada rota: tela → rótulos. */
+  readonly routeLabels?: (member: string, field?: string) => ReadonlyMap<string, readonly string[]> | null;
   /** Campos do tipo declarado do item de uma lista da classe; `null` sem prova do tipo. */
   readonly listItemFields?: (list: string) => readonly string[] | null;
   /** ids já usados no projeto; recebe os novos ids gerados */
@@ -72,6 +77,10 @@ export interface TagContext {
   readonly mode?: 'classic' | 'ref';
   /** Componente apresentado como overlay: tipo (`modal`, `popover`) e nome derivado do seletor, sem prefixo/sufixo técnico. */
   readonly overlay?: { readonly elemento: string; readonly nome: string };
+  /** Página roteada em mais de um caminho: o marcador de tela leva as rotas e o runtime escolhe pela rota ativa. */
+  readonly routes?: readonly ScreenRoute[];
+  /** Definição do componente dono do template: gesto sem texto que só repassa @Output é marcado no uso, não aqui. */
+  readonly self?: ComponentDef;
 }
 
 export interface TagResult {
@@ -165,7 +174,7 @@ export class TemplateTagger {
    * (nomes, números) não são enviados e o nome da ação é usado no lugar.
    */
   private staticLabel(html: string, tag: string, tagEnd: number, attrs: ReadonlyMap<string, string>): string {
-    const human = this.accessibleCandidates(attrs).find((value) => !looksLikeIdentifier(value));
+    const human = this.accessibleCandidates(attrs).find((value) => !looksLikeIdentifier(value) && slug(value).replace(/-/g, '').length >= 2);
     if (human) return human;
     // Texto interno de controle de escolha são as opções (valor enviado em opcao_selecionada_1), não o nome do controle.
     if (OPTION_CONTAINER_TAGS.has(tag)) return '';
@@ -183,7 +192,8 @@ export class TemplateTagger {
       .trim();
     // Em componente customizado o conteúdo é projetado (modal, overlay, card):
     // só um texto curto descreve o gesto; frases longas são conteúdo.
-    if (text && (!this.isCustomElement(tag) || text.split(' ').length <= 4)) return text;
+    // Glifo (`X`, `?`, `>`) não diz a ação: o handler nomeia o gesto.
+    if (text && slug(text).replace(/-/g, '').length >= 2 && (!this.isCustomElement(tag) || text.split(' ').length <= 4)) return text;
     // Wrapper sem texto próprio (div com checkbox, card): rótulo de um único filho.
     const nested = new Set([...inner.matchAll(/\s(?:aria-label|label|title)\s*=\s*(["'])([^"'{}]+)\1/g)]
       .map((match) => match[2]!.trim()).filter((value) => value && !looksLikeIdentifier(value)));
@@ -297,7 +307,15 @@ export class TemplateTagger {
    * provados. Dado de @Input, store ou API não é provável e retorna vazio.
    */
   private provenLabels(masked: string, at: number, html: string, tag: string, tagEnd: number,
-    attrs: ReadonlyMap<string, string>, ctx: TagContext): string[] {
+    attrs: ReadonlyMap<string, string>, ctx: TagContext, byScreen: Map<string, readonly string[]>): string[] {
+    /** Prova pelo `data` de cada rota: o token leva a união (o texto exibido sempre vem de uma delas), cada tela a sua lista. */
+    const fromRoutes = (member: string, field?: string): string[] | null => {
+      const screens = ctx.routeLabels?.(member, field);
+      const all = screens && [...new Set([...screens.values()].flat())];
+      if (!screens || !all?.length) return null;
+      for (const [screen, labels] of screens) byScreen.set(screen, labels);
+      return all;
+    };
     const close = html.indexOf(`</${tag}`, tagEnd);
     const interpolation = close === -1 ? undefined : /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/.exec(html.slice(tagEnd, close).replace(/<!--[\s\S]*?-->/g, ' ').replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' '))?.[1];
     const expressions = BOUND_LABEL_ATTRIBUTES.map((name) => attrs.get(name)).concat(interpolation);
@@ -313,7 +331,8 @@ export class TemplateTagger {
           // Variável declarada no template não é membro do componente.
           if (!root || new RegExp(`(?:\\blet\\s+|\\bas\\s+|@for\\s*\\(\\s*)${root.replace(/\$/g, '\\$')}\\b`).test(html)) return null;
           const texts = ctx.displayTexts?.(node.getText());
-          return texts?.length && !texts.some(looksLikeIdentifier) ? texts.map((text) => labelSlug(text)) : null;
+          if (texts?.length && !texts.some(looksLikeIdentifier)) return texts.map((text) => labelSlug(text));
+          return ts.isIdentifier(node) ? fromRoutes(node.text) : null;
         }
         const yes = alternatives(node.whenTrue), no = alternatives(node.whenFalse);
         return yes && no && yes.length + no.length <= 64 ? [...yes, ...no] : null;
@@ -321,25 +340,33 @@ export class TemplateTagger {
       const labels = statement && ts.isExpressionStatement(statement) ? alternatives(statement.expression) : null;
       if (labels?.length && labels.every(Boolean)) return [...new Set(labels)];
     }
-    if (!ctx.listLabels) return [];
+    if (!ctx.listLabels && !ctx.routeLabels) return [];
     for (const expression of expressions) {
       const reference = expression && /^(?:(["'])(.*?)\1\s*\+\s*)?([A-Za-z_$][\w$]*)\??\.([A-Za-z_$][\w$]*)$/.exec(expression.trim());
       if (!reference) continue;
       const list = this.loopSource(masked.slice(0, at), attrs.get('*ngFor'), reference[3]!);
-      const values = list ? ctx.listLabels(list, reference[4]!) : null;
+      const values = list ? ctx.listLabels?.(list, reference[4]!) ?? (reference[1] ? null : fromRoutes(list, reference[4]!)) : null;
       const labels = [...new Set((values ?? []).map((value) => labelSlug((reference[2] ?? '') + value)).filter(Boolean))];
       if (labels.length) return labels;
     }
     return [];
   }
 
-  /** Lista iterada que declara `variable`: no próprio elemento ou no laço anterior mais próximo. */
-  private loopSource(before: string, ownLoop: string | undefined, variable: string): string | null {
+  /**
+   * Lista iterada que declara `variable`: no próprio elemento ou no laço anterior mais próximo. Laço aninhado sobre o
+   * item de outro laço (`servico of secao.servicos`) vira o caminho a partir do membro do componente (`secoes.servicos`).
+   */
+  private loopSource(before: string, ownLoop: string | undefined, variable: string, depth = 0): string | null {
     const name = variable.replace(/\$/g, '\\$');
-    const own = ownLoop && new RegExp(`^\\s*let\\s+${name}\\s+of\\s+(?:this\\.)?([A-Za-z_$][\\w$]*)\\s*(?:[;,]|$)`).exec(ownLoop);
-    if (own) return own[1]!;
-    const loops = [...before.matchAll(new RegExp(`(?:\\*ngFor\\s*=\\s*["']\\s*let\\s+${name}\\s+of\\s+|@for\\s*\\(\\s*${name}\\s+of\\s+)(?:this\\.)?([A-Za-z_$][\\w$]*)\\s*[;,"')]`, 'g'))];
-    return loops.at(-1)?.[1] ?? null;
+    const source = '(?:this\\.)?([A-Za-z_$][\\w$]*(?:\\??\\.[A-Za-z_$][\\w$]*)*)';
+    const own = ownLoop && new RegExp(`^\\s*let\\s+${name}\\s+of\\s+${source}\\s*(?:[;,]|$)`).exec(ownLoop);
+    const found = own ? own[1]! : [...before.matchAll(new RegExp(`(?:\\*ngFor\\s*=\\s*["']\\s*let\\s+${name}\\s+of\\s+|@for\\s*\\(\\s*${name}\\s+of\\s+)${source}\\s*[;,"')]`, 'g'))].at(-1)?.[1];
+    if (!found) return null;
+    const [root, ...rest] = found.replace(/\?\./g, '.').split('.');
+    if (!rest.length || depth > 6) return rest.length ? null : root!;
+    // A raiz pode ser o item de um laço externo; sem laço, é membro do componente.
+    const outer = this.loopSource(before.slice(0, before.lastIndexOf(found)), undefined, root!, depth + 1);
+    return [outer ?? root, ...rest].join('.');
   }
 
   private viewContract(value: string): { id: string; elemento: string; rotulo: string } {
@@ -396,8 +423,9 @@ export class TemplateTagger {
   }
 
   /** Identificador sem palavras de código: btnProtocoloCompartilhar → protocolo-compartilhar */
-  private semanticWords(value: string): string {
-    return this.words(value).split('-').filter((word) => word && !TECHNICAL_LABEL_WORDS.has(word)).join('-');
+  private semanticWords(value: string, translate = true): string {
+    const words = this.words(value).split('-').filter((word) => word && !TECHNICAL_LABEL_WORDS.has(word) && !UI_STRUCTURE_WORDS.has(word));
+    return (translate ? words.map((word) => ACTION_VERBS.get(word) ?? word) : words).join('-');
   }
 
   /** Conteúdo direto do elemento, sem os filhos e o que há dentro deles. */
@@ -417,10 +445,14 @@ export class TemplateTagger {
     return (!!prefix && looksLikeIdentifier(prefix)) || !!ctx.displayTexts?.(expression)?.every(looksLikeIdentifier);
   }
 
-  /** Método em inglês vira o verbo do negócio; `toggleChange` não repete o `change` técnico. */
+  /**
+   * Método em inglês vira o verbo do negócio; `toggleChange` não repete o `change` técnico e a navegação no começo
+   * do método (`rotaAnexar`, `irParaPagamento`) é implementação: fica o que a pessoa faz.
+   */
   private businessWords(handler: string): string {
-    return this.semanticWords(handler).split('-').filter((word, index) => !index || word !== 'change')
-      .map((word, index) => (index ? word : ACTION_VERBS.get(word) ?? word)).join('-');
+    const words = this.semanticWords(handler, false).replace(/^(?:rota|route|navegar|navigate|ir|go|redirecionar|redirect)-(?:(?:para|pra|to)-)?(?!(?:para|pra|to)$)(?=.)/, '');
+    return words.split('-').filter((word, index) => !index || word !== 'change')
+      .map((word) => ACTION_VERBS.get(word) ?? word).join('-');
   }
 
   /** Texto do botão que envia o formulário: é o que a pessoa toca. */
@@ -441,7 +473,9 @@ export class TemplateTagger {
     // editarLocal('local') não repete a palavra já presente no handler.
     const fromHandler = argument && `-${verb}-`.includes(`-${argument}-`) ? verb
       : [verb, argument].filter(Boolean).join('-');
-    if (fromHandler && !GENERIC_ELEMENT_LABEL.test(fromHandler)) return fromHandler;
+    // Verbo que pede objeto e ficou sozinho porque o objeto era estrutura de UI: vale a próxima fonte provada.
+    const objectless = OBJECT_VERBS.has(fromHandler) && this.words(handler).includes('-');
+    if (fromHandler && !GENERIC_ELEMENT_LABEL.test(fromHandler) && !objectless) return fromHandler;
     for (const alternative of alternatives) {
       const name = alternative ? this.semanticWords(alternative) : '';
       if (name && !GENERIC_ELEMENT_LABEL.test(name)) return name;
@@ -476,7 +510,9 @@ export class TemplateTagger {
 
   /** Prefixo do ID sem repetir a funcionalidade quando o nome da tela já a contém. */
   private idPrefix(funcionalidade: string, tela: string): string {
-    return tela === funcionalidade || tela.startsWith(`${funcionalidade}-`) ? tela : `${funcionalidade}-${tela}`;
+    // A tela pode descer a escadinha da rota (`calcular-reembolso:dados`); o ID usa só o último nível.
+    const leaf = tela.split(':').pop()!;
+    return leaf === funcionalidade || leaf.startsWith(`${funcionalidade}-`) ? leaf : `${funcionalidade}-${leaf}`;
   }
 
   private uniqueId(base: string, used: Set<string>): string {
@@ -693,6 +729,10 @@ export class TemplateTagger {
         const screenId = this.claimId(attrs.get('data-at-screen'), `${prefix}-tela`, ctx, claimed);
         desired.set('data-at-screen', screenId);
         derived.add('data-at-screen');
+        if (ctx.routes?.length) {
+          desired.set('data-at-routes', encodeScreenRoutes(ctx.routes));
+          derived.add('data-at-routes');
+        }
         entries.push(this.createEntry({ id: screenId, evento: 'screen_view', acao: 'visualizacao', elemento: '', rotulo: '', origem: 'rota', linha }, ctx, funcionalidade, tela));
       }
 
@@ -720,8 +760,10 @@ export class TemplateTagger {
       const visibleLabel = tag === 'form' && (attrs.has('(ngSubmit)') || attrs.has('(submit)'))
         ? this.submitLabel(html, tagEnd)
         : this.staticLabel(html, tag, tagEnd, attrs);
-      const proven = visibleLabel ? [] : this.provenLabels(masked, m.index!, html, tag, tagEnd, attrs, ctx);
-      const label = visibleLabel || (proven.length === 1 ? proven[0]! : '');
+      const provenByScreen = new Map<string, readonly string[]>();
+      const proven = visibleLabel ? [] : this.provenLabels(masked, m.index!, html, tag, tagEnd, attrs, ctx, provenByScreen);
+      const byScreen = proven.length > 1 && provenByScreen.size ? { rotulosPorTela: Object.fromEntries(provenByScreen) } : {};
+      const label = productLabel(slug(visibleLabel, MAX_PROVEN_LABEL)) || (proven.length === 1 ? proven[0]! : '');
       const rotulos = proven.length > 1 ? proven : [];
       // Texto de menu/serviço muda sem novo build: o runtime lê o valor visível no clique.
       const boundLabel = BOUND_LABEL_ATTRIBUTES
@@ -759,7 +801,10 @@ export class TemplateTagger {
       });
       const trackable = !this.isInputField(tag) || provenCompositeAction
         || (tag === 'input' && ['checkbox', 'radio'].includes(attrs.get('type') ?? ''));
-      const domBinding = trackable ? DOM_GESTURES.find((b) => attrs.has(b) && (!['(ngSubmit)', '(submit)'].includes(b) || tag === 'form')) : undefined;
+      const ownBinding = trackable ? DOM_GESTURES.find((b) => attrs.has(b) && (!['(ngSubmit)', '(submit)'].includes(b) || tag === 'form')) : undefined;
+      // Um único evento por gesto: o uso (com o handler de negócio) representa o repasse sem texto.
+      const domBinding = ownBinding && ctx.self && this.analysis.usageGesture(ctx.self, tag, attrs, html, m.index!, attrs.get(ownBinding)!)
+        ? undefined : ownBinding;
       const navigation = trackable && !domBinding && this.isNavigation(attrs);
       if (domBinding || navigation) {
         const expr = domBinding ? attrs.get(domBinding)! : '';
@@ -806,7 +851,7 @@ export class TemplateTagger {
           desired.set('data-at-event', event);
           derived.add('data-at-event');
         }
-        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
+        entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento: attrs.get('data-at-elemento') ?? elemento, rotulo: sheetLabel(rotulo, !!dynamicSource), ...(rotulos.length ? { rotulos, ...byScreen } : {}), ...(selectionSource || selectionInput || event === 'change' || event === 'ionChange' ? { opcao_selecionada_1: optionSheet } : {}), origem: domBinding ?? 'routerLink', linha }, ctx, funcionalidade, tela));
       }
 
       // saídas de componentes: (onClick), (voltar), (onChange)... mapeadas até o gesto DOM que as dispara
@@ -860,8 +905,8 @@ export class TemplateTagger {
             !(DOM_GESTURES as readonly string[]).includes(attribute) && !TECHNICAL_EVENT.test(attribute));
           // Ações distintas do mesmo componente (ver, excluir) não podem chegar iguais ao Firebase.
           const verb = activeOutputs.length > 1 && ownLabel && !dynamicLabel && !rotulos.length
-            ? slug(this.words(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action|on|handle)-/, '').replace(/^click$/, '').replace(/^[a-z]+/, (word) => ACTION_VERBS.get(word) ?? word)) : '';
-          const rotulo = verb && !slug(ownLabel).includes(verb) ? slug(`${verb}-${ownLabel}`, MAX_PROVEN_LABEL) : slug(ownLabel) || name;
+            ? slug(this.semanticWords(this.withoutTagPrefix(output, tag)).replace(/^(?:acao|action)-/, '').replace(/^[a-z]+/, (word) => ACTION_VERBS.get(word) ?? word)) : '';
+          const rotulo = verb && !slug(ownLabel).includes(verb) ? joinLabel(verb, slug(ownLabel)) : slug(ownLabel) || name;
           const solePriorOutput = previous?.length === 1 && !prior?.click ? previous[0] : undefined;
           const migratedId = !known.has(output) && activeOutputs.length === 1 &&
             solePriorOutput?.label === rotulo ? solePriorOutput.id : undefined;
@@ -874,7 +919,7 @@ export class TemplateTagger {
             portalAnchors.set(anchor, anchored);
           }
           if (dynamicLabel && !dynamicIds.includes(id)) dynamicIds.push(id);
-          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
+          entries.push(this.createEntry({ id, evento: 'click', acao: 'clique', elemento, rotulo: sheetLabel(rotulo, dynamicLabel), ...(rotulos.length ? { rotulos, ...byScreen } : {}), ...(selectionSource && !navigation || triggers.some((trigger) => trigger.event === 'change' || trigger.event === 'ionChange') ? { opcao_selecionada_1: optionSheet } : {}), origem: `(${output}) em <${tag}>`, linha }, ctx, funcionalidade, tela));
           if (ownLabel && this.labelBehaviorConflict(ownLabel, handler)) {
             diagnostics.push({ code: 'VISIBLE_LABEL_BEHAVIOR_CONFLICT', arquivo: ctx.relFile, linha, mensagem: `texto '${ownLabel}' contradiz o handler '${handler}'; ação não reclassificada pelo texto` });
           }
@@ -933,6 +978,7 @@ export class TemplateTagger {
           ...(rotulos.length && (clickId || bindings.length || overlay.length) ? { rotulos } : {}),
           ...(dynamicIds.length ? { rotuloDinamico: dynamicIds } : {}),
           ...(desired.get('data-at-view') ? { view: this.viewContract(desired.get('data-at-view')!) } : {}),
+          ...(screenId && ctx.routes?.length ? { routes: ctx.routes } : {}),
         };
         const ref = encodeTrackingToken(element);
         for (let index = entryStart; index < entries.length; index++) entries[index] = { ...entries[index]!, ref };

@@ -92,13 +92,13 @@ describe('tagger: toda interação declarada no template', () => {
 
   it('expressão com ">" em atributo de filho não vaza para o rótulo', () => {
     const html = `<div (click)="abrirModalLocalizacao()" [attr.aria-label]="'btn-welcome-home-abrir-localizacao'"><x-select [enable]="lista.length > 0" [label]="ok ? 'a' : 'b'"></x-select></div>`;
-    expect(tagTemplate(html, ctx()).entries[0]!.rotulo).toBe('abrir-modal-localizacao');
+    expect(tagTemplate(html, ctx()).entries[0]!.rotulo).toBe('abrir-localizacao');
   });
 
   it('title ligado a literal é rótulo; texto longo projetado em componente não é', () => {
     expect(tagTemplate(`<bsad-button [title]="'Avançar'" (click)="avancar()"></bsad-button>`, ctx()).entries[0]!.rotulo).toBe('avancar');
     const modal = tagTemplate('<x-modal (click)="onModalCloseButton()"><p>Ao ser redirecionado para efetuar a ligação o aplicativo pode fechar</p></x-modal>', ctx());
-    expect(modal.entries[0]!.rotulo).toBe('modal-close');
+    expect(modal.entries[0]!.rotulo).toBe('fechar');
   });
 
   it('argumento literal já contido no handler não é repetido', () => {
